@@ -89,7 +89,9 @@ bool AeroServer::start(int port) {
     setsockopt(server_fd_, IPPROTO_TCP,  TCP_NODELAY,  &yes, sizeof(yes));
     setsockopt(server_fd_, IPPROTO_IPV6, IPV6_V6ONLY,  &no,  sizeof(no));
     int sndbuf = 4 * 1024 * 1024; // 4 MB send buffer
+    int rcvbuf = 4 * 1024 * 1024; // 4 MB recv buffer — large files
     setsockopt(server_fd_, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+    setsockopt(server_fd_, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 
     sockaddr_in6 addr{};
     addr.sin6_family = AF_INET6;
@@ -190,17 +192,24 @@ void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
     FILE* out_f = fopen(out_path.c_str(), "wb");
     if (!out_f) { perror("[AeroServer] fopen output"); return; }
 
-    // 6. Stream payload into file
+    // 6. Stream payload into file — 512 KiB buffer for large-file throughput
     uint64_t received = 0;
     auto     t_start  = std::chrono::steady_clock::now();
-    uint8_t  buf[65536]; // 64 KiB
+    uint8_t  buf[524288]; // 512 KiB
 
     while (received < file_size) {
         uint64_t remaining = file_size - received;
         int to_read = (int)std::min(remaining, (uint64_t)sizeof(buf));
         int n = SSL_read(ssl, buf, to_read);
-        if (n <= 0) { fprintf(stderr, "[AeroServer] SSL_read error\n"); break; }
-        fwrite(buf, 1, (size_t)n, out_f);
+        if (n <= 0) {
+            int ssl_err = SSL_get_error(ssl, n);
+            fprintf(stderr, "[AeroServer] SSL_read error %d after %llu/%llu bytes\n",
+                    ssl_err, (unsigned long long)received, (unsigned long long)file_size);
+            break;
+        }
+        if (fwrite(buf, 1, (size_t)n, out_f) != (size_t)n) {
+            perror("[AeroServer] fwrite"); break;
+        }
         received += (uint64_t)n;
 
         if (incoming_progress_) {
@@ -210,6 +219,7 @@ void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
                                    sec > 0.0 ? (received / 1e6) / sec : 0.0 });
         }
     }
+    fflush(out_f);
     fclose(out_f);
 
     bool ok = (received == file_size);
@@ -306,7 +316,7 @@ void AeroServer::sendFile(const std::string& filepath,
             // --- Stream payload (read → SSL_write) ---
             auto     t_start = std::chrono::steady_clock::now();
             uint64_t sent    = 0;
-            uint8_t  buf[131072]; // 128 KiB
+            uint8_t  buf[524288]; // 512 KiB — large-file throughput
             while (sent < file_size) {
                 ssize_t rd = read(src_fd, buf, sizeof(buf));
                 if (rd <= 0) break;
