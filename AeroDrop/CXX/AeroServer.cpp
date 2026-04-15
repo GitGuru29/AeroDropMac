@@ -47,7 +47,9 @@ AeroServer::AeroServer() {
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
 
-    // Default output directory: ~/Downloads
+    // Default output directory: ~/Downloads via passwd entry.
+    // The real path is overridden from ObjC++ using setDownloadDir()
+    // to let NSFileManager resolve the correct path even in edge cases.
     const char* home = getenv("HOME");
     if (!home) {
         struct passwd* pw = getpwuid(getuid());
@@ -274,16 +276,52 @@ void AeroServer::sendFile(const std::string& filepath,
         lseek(src_fd, 0, SEEK_SET);
         std::string filename  = fs::path(filepath).filename().string();
 
-        // --- Connect ---
-        int sock = socket(AF_INET, SOCK_STREAM, 0);
-        sockaddr_in addr{};
-        addr.sin_family = AF_INET;
-        addr.sin_port   = htons(peer_port);
-        inet_pton(AF_INET, peer_ip.c_str(), &addr.sin_addr);
+        // --- Connect (IPv6 first, fall back to IPv4) ---
+        // NWBrowser may resolve IPv6 link-local addresses (fe80::...%en0).
+        // Strip the scope-id before passing to inet_pton.
+        std::string clean_ip = peer_ip;
+        auto pct = clean_ip.find('%');
+        if (pct != std::string::npos) clean_ip = clean_ip.substr(0, pct);
 
-        if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        int sock = -1;
+
+        // Try IPv6 first
+        struct sockaddr_in6 addr6{};
+        if (inet_pton(AF_INET6, clean_ip.c_str(), &addr6.sin6_addr) == 1) {
+            sock = socket(AF_INET6, SOCK_STREAM, 0);
+            addr6.sin6_family = AF_INET6;
+            addr6.sin6_port   = htons(peer_port);
+            int nb = 1;
+            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
+            int sndbuf = 4 * 1024 * 1024;
+            setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+            if (connect(sock, (sockaddr*)&addr6, sizeof(addr6)) < 0) {
+                fprintf(stderr, "[AeroServer] IPv6 connect failed: %s\n", strerror(errno));
+                close(sock); sock = -1;
+            }
+        }
+
+        // Fall back to IPv4
+        if (sock < 0) {
+            struct sockaddr_in addr4{};
+            if (inet_pton(AF_INET, clean_ip.c_str(), &addr4.sin_addr) == 1) {
+                sock = socket(AF_INET, SOCK_STREAM, 0);
+                addr4.sin_family = AF_INET;
+                addr4.sin_port   = htons(peer_port);
+                int nb = 1;
+                setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
+                int sndbuf = 4 * 1024 * 1024;
+                setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+                if (connect(sock, (sockaddr*)&addr4, sizeof(addr4)) < 0) {
+                    fprintf(stderr, "[AeroServer] IPv4 connect failed: %s\n", strerror(errno));
+                    close(sock); sock = -1;
+                }
+            }
+        }
+
+        if (sock < 0) {
             close(src_fd);
-            if (done) done(false, std::string("Connect failed: ") + strerror(errno));
+            if (done) done(false, "Cannot connect to " + peer_ip + ":" + std::to_string(peer_port));
             return;
         }
 

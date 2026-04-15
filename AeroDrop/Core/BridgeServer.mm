@@ -47,6 +47,23 @@ static AeroTransferProgress* makeProgress(const TransferProgress& p) {
     if (self = [super init]) {
         _server = std::make_unique<AeroServer>();
 
+        // ── Set real Downloads path via NSFileManager ─────────────────────
+        // getenv("HOME") in C++ can resolve to the sandbox container path.
+        // NSFileManager always returns the real ~/Downloads.
+        NSURL* dlDir = [[[NSFileManager defaultManager]
+                          URLsForDirectory:NSDownloadsDirectory
+                                 inDomains:NSUserDomainMask] firstObject];
+        if (dlDir) {
+            // Ensure AeroDrop subfolder exists so files are easy to find
+            NSURL* aeroDir = [dlDir URLByAppendingPathComponent:@"AeroDrop" isDirectory:YES];
+            [[NSFileManager defaultManager] createDirectoryAtURL:aeroDir
+                                     withIntermediateDirectories:YES
+                                                      attributes:nil
+                                                           error:nil];
+            _server->setDownloadDirectory(aeroDir.path.UTF8String);
+            NSLog(@"[BridgeServer] Download dir: %@", aeroDir.path);
+        }
+
         __weak typeof(self) weak = self;
 
         _server->setIncomingProgressCallback([weak](const TransferProgress& p) {
@@ -80,6 +97,11 @@ static AeroTransferProgress* makeProgress(const TransferProgress& p) {
               progress:(void(^)(AeroTransferProgress*))progress
             completion:(void(^)(BOOL, NSString* _Nullable))completion {
 
+    // Security-scoped resource access — required when file comes from
+    // NSOpenPanel or drag-and-drop (system may have granted a scoped bookmark).
+    NSURL* url = [NSURL fileURLWithPath:path];
+    BOOL   scoped = [url startAccessingSecurityScopedResource];
+
     _server->sendFile(
         path.UTF8String,
         host.UTF8String,
@@ -89,7 +111,9 @@ static AeroTransferProgress* makeProgress(const TransferProgress& p) {
             AeroTransferProgress* obj = makeProgress(p);
             dispatch_async(dispatch_get_main_queue(), ^{ progress(obj); });
         },
-        [completion](bool ok, const std::string& err) {
+        [completion, url, scoped](bool ok, const std::string& err) {
+            // Release scoped access once the transfer thread is done
+            if (scoped) [url stopAccessingSecurityScopedResource];
             if (!completion) return;
             NSString* nsErr = ok ? nil : @(err.c_str());
             dispatch_async(dispatch_get_main_queue(), ^{ completion((BOOL)ok, nsErr); });
