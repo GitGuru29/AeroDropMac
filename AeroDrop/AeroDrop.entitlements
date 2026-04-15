@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ── App Sandbox ───────────────────────────────────────────────────── -->
+    <!--  Sandbox is DISABLED here so the TLS server can bind to port 7770.  -->
+    <!--  For Mac App Store distribution you would need to either:           -->
+    <!--    a) Use a random high port and enable network-server entitlement  -->
+    <!--    b) Distribute outside the App Store (direct / Notarized DMG)     -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!-- ── Network ──────────────────────────────────────────────────────── -->
+    <!-- Allow outbound TCP connections (sending files to Android) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Allow inbound TCP connections (receiving files from Android) -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- ── File system ──────────────────────────────────────────────────── -->
+    <!-- Read-only access to any file the user drops onto the Drop Zone -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    <!-- Read-write access to ~/Downloads for received files -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+</dict>
+</plist>

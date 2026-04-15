@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ── Hide dock icon — this is a menu-bar-only app ─────────────────── -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- ── App metadata ─────────────────────────────────────────────────── -->
+    <key>CFBundleName</key>
+    <string>AeroDrop</string>
+    <key>CFBundleDisplayName</key>
+    <string>AeroDrop</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <!-- ── macOS minimum version ─────────────────────────────────────────── -->
+    <key>LSMinimumSystemVersion</key>
+    <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+
+    <!-- ── Privacy usage strings (macOS 13+ asks the user) ──────────────── -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>AeroDrop uses your local network to discover and connect to nearby Android devices for file transfers.</string>
+
+    <!-- ── Bonjour services this app browses/advertises ─────────────────── -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_aerodrop._tcp</string>
+    </array>
+
+    <!-- ── Allow incoming network connections from the firewall dialog ───── -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <!-- We run a local TLS server — local connections are allowed -->
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+
+    <!-- ── Drag-and-drop accepted file types ─────────────────────────────── -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.data</string>
+            </array>
+        </dict>
+    </array>
+
+    <!-- ── Main nib / storyboard: none (pure SwiftUI) ───────────────────── -->
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+</dict>
+</plist>
