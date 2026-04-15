@@ -61,7 +61,6 @@ final class DropZoneViewModel: ObservableObject {
 
         _ = server.start()
         bonjour.startAdvertising()
-        injectDemoPeers()
     }
 
     func onDisappear() {
@@ -97,16 +96,6 @@ final class DropZoneViewModel: ObservableObject {
         )
     }
 
-    // Placeholder peers for UI development (replaced by real NsdManager data)
-    private func injectDemoPeers() {
-        peers = [
-            AeroPeerInfo(id: UUID(), name: "Pixel 9 Pro – siluna",
-                         host: "192.168.1.42", port: 7770),
-            AeroPeerInfo(id: UUID(), name: "Galaxy S25 Ultra",
-                         host: "192.168.1.55", port: 7770),
-        ]
-        selectedPeer = peers.first
-    }
 }
 
 // ── Animated Grid Background ──────────────────────────────────────────────────
