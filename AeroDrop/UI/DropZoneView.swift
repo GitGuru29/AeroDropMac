@@ -59,13 +59,13 @@ final class DropZoneViewModel: ObservableObject {
             }
         }
 
-        _ = server.startServer()
+        _ = server.start()
         bonjour.startAdvertising()
         injectDemoPeers()
     }
 
     func onDisappear() {
-        server.stopServer()
+        server.stop()
         bonjour.stopAdvertising()
     }
 

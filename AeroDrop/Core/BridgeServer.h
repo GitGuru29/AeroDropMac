@@ -27,13 +27,13 @@ NS_ASSUME_NONNULL_BEGIN
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
 /// Start the TLS 1.3 server on port 7770. Returns YES on success.
-- (BOOL)startServer;
+- (BOOL)start NS_SWIFT_NAME(start());
 
 /// Stop the server and join the accept thread.
-- (void)stopServer;
+- (void)stop NS_SWIFT_NAME(stop());
 
 /// Returns YES if the TLS listener is currently active.
-- (BOOL)isRunning;
+- (BOOL)isRunning NS_SWIFT_NAME(isRunning());
 
 // ── Outbound transfer ────────────────────────────────────────────────────────
 

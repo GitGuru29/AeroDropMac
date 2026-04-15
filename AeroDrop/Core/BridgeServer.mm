@@ -70,9 +70,9 @@ static AeroTransferProgress* makeProgress(const TransferProgress& p) {
     return self;
 }
 
-- (BOOL)startServer  { return (BOOL)_server->start(7770); }
-- (void)stopServer   { _server->stop(); }
-- (BOOL)isRunning    { return (BOOL)_server->isRunning(); }
+- (BOOL)start   { return (BOOL)_server->start(7770); }
+- (void)stop    { _server->stop(); }
+- (BOOL)isRunning { return (BOOL)_server->isRunning(); }
 
 - (void)sendFileAtPath:(NSString*)path
                 toHost:(NSString*)host
