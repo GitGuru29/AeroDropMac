@@ -186,12 +186,9 @@ SSL_CTX* CertManager::createServerContext() {
     SSL_CTX* ctx = baseContext(TLS_server_method());
     if (!ctx) return nullptr;
 
-    // Request peer cert — we verify by fingerprint, not by CA chain.
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
-    SSL_CTX_set_verify_depth(ctx, 1);
-    // Accept any self-signed cert; fingerprint comparison happens in the UI.
-    SSL_CTX_set_cert_verify_callback(ctx,
-        [](X509_STORE_CTX*, void*) -> int { return 1; }, nullptr);
+    // Do NOT require a client certificate — Android cannot easily present one.
+    // Peer authenticity is established by SHA-256 fingerprint shown in the UI.
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
     return ctx;
 }
 
