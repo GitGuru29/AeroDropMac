@@ -3,6 +3,7 @@
 // Canvas GPU-animated grid background, neon progress ring, peer sidebar.
 
 import SwiftUI
+import AppKit
 import Combine
 import UniformTypeIdentifiers
 
@@ -113,6 +114,33 @@ final class DropZoneViewModel: ObservableObject {
                 }
             }
         )
+    }
+
+    /// Opens NSOpenPanel. Menu-bar apps run as .accessory and can't show
+    /// an NSOpenPanel unless the app briefly activates as .regular.
+    /// We restore .accessory immediately after the panel closes.
+    func openFilePicker() {
+        guard selectedPeer != nil else { return }
+
+        // Activate the app so the panel can come to front
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+
+        let panel                     = NSOpenPanel()
+        panel.title                   = "Choose a file to send"
+        panel.canChooseFiles          = true
+        panel.canChooseDirectories    = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories    = false
+
+        let response = panel.runModal()         // blocks until user picks or cancels
+
+        // Restore menu-bar-only presentation
+        NSApp.setActivationPolicy(.accessory)
+
+        if response == .OK, let url = panel.url {
+            dropFiles([url])
+        }
     }
 
 }
@@ -345,7 +373,7 @@ struct DropZoneView: View {
 
             VStack(spacing: 6) {
                 if let peer = vm.selectedPeer {
-                    Text("Drop files to send to")
+                    Text("Drop files or click below to send to")
                         .font(.system(size: 13))
                         .foregroundColor(.white.opacity(0.5))
                     Text(peer.name)
@@ -359,6 +387,32 @@ struct DropZoneView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.3))
                 }
+            }
+
+            // File picker button — shown only when a peer is selected
+            if vm.selectedPeer != nil {
+                Button(action: { vm.openFilePicker() }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.badge.plus")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text("Choose File…")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundColor(Color(red: 0.04, green: 0.04, blue: 0.10))
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 9)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.0, green: 1.0, blue: 0.9),
+                                     Color(red: 0.0, green: 0.8, blue: 1.0)],
+                            startPoint: .leading, endPoint: .trailing
+                        )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(color: Color(red: 0.0, green: 0.9, blue: 1.0).opacity(0.4),
+                            radius: 8, x: 0, y: 4)
+                }
+                .buttonStyle(.plain)
             }
 
             Text("TLS 1.3  ·  AES-256-GCM  ·  No cloud")
