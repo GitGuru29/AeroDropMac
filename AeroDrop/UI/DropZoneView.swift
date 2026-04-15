@@ -37,9 +37,9 @@ final class DropZoneViewModel: ObservableObject {
     private let bonjour = BonjourService.shared
 
     func onAppear() {
-        certFingerprint = server?.certFingerprint() ?? ""
+        certFingerprint = server.certFingerprint()
 
-        server?.incomingProgressHandler = { [weak self] p in
+        server.incomingProgressHandler = { [weak self] p in
             guard let self else { return }
             self.transferState = .receiving(
                 filename:  p.filename,
@@ -47,7 +47,7 @@ final class DropZoneViewModel: ObservableObject {
                 speedMbps: p.speedMbps
             )
         }
-        server?.incomingCompletionHandler = { [weak self] success, err in
+        server.incomingCompletionHandler = { [weak self] success, err in
             guard let self else { return }
             if success, case .receiving(let fn, _, _) = self.transferState {
                 self.transferState = .success(filename: fn)
@@ -59,13 +59,13 @@ final class DropZoneViewModel: ObservableObject {
             }
         }
 
-        _ = server?.startServer()
+        _ = server.startServer()
         bonjour.startAdvertising()
         injectDemoPeers()
     }
 
     func onDisappear() {
-        server?.stopServer()
+        server.stopServer()
         bonjour.stopAdvertising()
     }
 
@@ -73,7 +73,7 @@ final class DropZoneViewModel: ObservableObject {
         guard let peer = selectedPeer, let first = urls.first else { return }
         let filename = first.lastPathComponent
 
-        server?.sendFile(
+        server.sendFile(
             atPath: first.path,
             toHost: peer.host,
             port:   Int32(peer.port),
