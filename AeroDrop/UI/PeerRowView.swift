@@ -67,9 +67,11 @@ struct PeerRowView: View {
                         .foregroundColor(.white)
                         .lineLimit(1)
 
-                    Text("\(peer.host):\(peer.port)")
+                    Text("\(peer.host):\(peer.port, format: .number.grouping(.never))")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(.white.opacity(0.4))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
 
                 Spacer()
