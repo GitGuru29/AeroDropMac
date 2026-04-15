@@ -33,8 +33,10 @@ final class DropZoneViewModel: ObservableObject {
     @Published var isDropTargeted                = false
     @Published var certFingerprint: String       = ""
 
-    private let server  = BridgeServer.shared()
-    private let bonjour = BonjourService.shared
+    private let server   = BridgeServer.shared()
+    private let bonjour  = BonjourService.shared
+    private let browser  = AeroDiscoveryBrowser()      // NWBrowser for _aerodrop._tcp
+    private var peerSub: AnyCancellable?               // Observe browser.$peers
 
     func onAppear() {
         certFingerprint = server.certFingerprint()
@@ -61,9 +63,26 @@ final class DropZoneViewModel: ObservableObject {
 
         _ = server.start()
         bonjour.startAdvertising()
+
+        // Start browsing for Android devices advertising _aerodrop._tcp
+        peerSub = browser.$peers
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newPeers in
+                guard let self else { return }
+                self.peers = newPeers
+                // Auto-select first peer if none selected
+                if self.selectedPeer == nil { self.selectedPeer = newPeers.first }
+                // Deselect if selected peer disappeared
+                if let sel = self.selectedPeer, !newPeers.contains(sel) {
+                    self.selectedPeer = newPeers.first
+                }
+            }
+        browser.startBrowsing()
     }
 
     func onDisappear() {
+        browser.stopBrowsing()
+        peerSub = nil
         server.stop()
         bonjour.stopAdvertising()
     }
