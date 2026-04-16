@@ -221,6 +221,7 @@ void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
     auto     buf     = std::make_unique<uint8_t[]>(524288);
     uint64_t received = 0;
     auto     t_start  = std::chrono::steady_clock::now();
+    auto     t_last   = t_start;
 
     while (received < file_size) {
         uint64_t remaining = file_size - received;
@@ -238,10 +239,13 @@ void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
         received += (uint64_t)n;
 
         if (incoming_progress_) {
-            auto   now = std::chrono::steady_clock::now();
-            double sec = std::chrono::duration<double>(now - t_start).count();
-            incoming_progress_({ filename, received, file_size,
-                                   sec > 0.0 ? (received / 1e6) / sec : 0.0 });
+            auto now = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(now - t_last).count() > 100 || received == file_size) {
+                t_last = now;
+                double sec = std::chrono::duration<double>(now - t_start).count();
+                incoming_progress_({ filename, received, file_size,
+                                       sec > 0.0 ? (received / 1e6) / sec : 0.0 });
+            }
         }
     }
     fflush(out_f);
@@ -383,6 +387,7 @@ void AeroServer::sendFile(const std::string& filepath,
         // ── Stream payload (read file → SSL_write) ───────────────────────────
         auto     buf     = std::make_unique<uint8_t[]>(524288); // 512 KiB heap
         auto     t_start = std::chrono::steady_clock::now();
+        auto     t_last  = t_start;
         uint64_t sent    = 0;
 
         while (sent < file_size) {
@@ -394,10 +399,13 @@ void AeroServer::sendFile(const std::string& filepath,
             }
             sent += (uint64_t)wr;
             if (progress) {
-                auto   now = std::chrono::steady_clock::now();
-                double sec = std::chrono::duration<double>(now - t_start).count();
-                progress({ filename, sent, file_size,
-                            sec > 0.0 ? (sent / 1e6) / sec : 0.0 });
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - t_last).count() > 100 || sent == file_size) {
+                    t_last = now;
+                    double sec = std::chrono::duration<double>(now - t_start).count();
+                    progress({ filename, sent, file_size,
+                                sec > 0.0 ? (sent / 1e6) / sec : 0.0 });
+                }
             }
         }
 
