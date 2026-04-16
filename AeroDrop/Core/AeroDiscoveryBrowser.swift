@@ -135,17 +135,16 @@ final class AeroDiscoveryBrowser: ObservableObject {
 
         print("[AeroDiscovery] Resolving: \(name).\(type)\(domain)")
 
-        // Use plain NWParameters.tcp so Network.framework performs mDNS resolution.
-        // Force IPv4 (v4) so we get Android's IPv4 address (e.g. 10.54.x.x or 192.168.x.x)
-        // rather than its IPv6 link-local (fe80::...). Android's SSLServerSocket listens
-        // on 0.0.0.0:7770 (IPv4 only). If we stored the link-local IPv6 address and
-        // tried to connect in C++, the connection would be refused/timeout even though
-        // the port is open — because Android's socket isn't listening on IPv6.
-        let tcpOpts = NWProtocolTCP.Options()
-        let ipOpts  = NWProtocolIP.Options()
-        ipOpts.version = .v4            // Restrict resolution to IPv4 addresses only
-        let connParams = NWParameters(tls: nil, tcp: tcpOpts)
-        connParams.defaultProtocolStack.internetProtocol = ipOpts
+        // Force IPv4 so we get Android's IPv4 address (e.g. 10.54.x.x) rather than
+        // its IPv6 link-local (fe80::...). Android's SSLServerSocket listens on
+        // 0.0.0.0:7770 (IPv4 only) — connecting via IPv6 link-local gets refused.
+        //
+        // NWProtocolIP.Options has no public initializer; we must obtain the existing
+        // instance from within NWParameters.tcp and modify it before using it.
+        let connParams = NWParameters.tcp
+        if let ipOpts = connParams.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOpts.version = .v4       // prefer IPv4 resolution
+        }
 
         let endpoint = NWEndpoint.service(name: name, type: type,
                                           domain: domain, interface: nil)
