@@ -171,6 +171,8 @@ static SSL_CTX* baseContext(const SSL_METHOD* method) {
 
     // TLS 1.3 only — no legacy protocol versions
     SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
+    SSL_CTX_set_num_tickets(ctx, 0);
+
 
     if (SSL_CTX_use_certificate_file(ctx, CertManager::certPath().c_str(), SSL_FILETYPE_PEM) != 1 ||
         SSL_CTX_use_PrivateKey_file(ctx,  CertManager::keyPath().c_str(),  SSL_FILETYPE_PEM) != 1 ||

@@ -144,6 +144,9 @@ void AeroServer::acceptLoop() {
 
         // Spawn a thread per connection so the accept loop stays hot
         std::thread([this, client_fd]() {
+            int no_sigpipe = 1;
+            setsockopt(client_fd, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+
             // ── Null-check: SSL_new can fail if memory is exhausted ──────────
             SSL* ssl = SSL_new(ssl_ctx_);
             if (!ssl) {
@@ -324,6 +327,9 @@ void AeroServer::sendFile(const std::string& filepath,
             if (s < 0) continue;
             int nb = 1;
             setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
+            int no_sigpipe = 1;
+            setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+
             int sndbuf = 4 * 1024 * 1024;
             setsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
             if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0) {
