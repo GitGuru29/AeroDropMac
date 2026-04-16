@@ -62,7 +62,13 @@ final class DropZoneViewModel: ObservableObject {
             }
         }
 
-        _ = server.start()
+        // Start server on a background thread — RSA-4096 key generation
+        // on first launch takes up to 30 s and must NOT block the main thread.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let ok = self.server.start()
+            if !ok { print("[AeroDrop] ⚠️  Server failed to start — check cert/port") }
+        }
         bonjour.startAdvertising()
 
         // Start browsing for Android devices advertising _aerodrop._tcp

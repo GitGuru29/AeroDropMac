@@ -182,13 +182,14 @@ final class AeroDiscoveryBrowser: ObservableObject {
     private func hostString(from host: NWEndpoint.Host) -> String {
         switch host {
         case .ipv4(let addr):
-            // IPv4Address doesn't expose a direct String; use debugDescription
             return addr.debugDescription
         case .ipv6(let addr):
-            // Strip scope-id (e.g. "%en0") from link-local addresses
-            let s = addr.debugDescription
-            if let pct = s.firstIndex(of: "%") { return String(s[..<pct]) }
-            return s
+            // IMPORTANT: keep the full address INCLUDING the %scope-id (e.g. "fe80::1%en0").
+            // Stripping it produces an un-routable link-local address — connect() fails with
+            // ENETUNREACH because the kernel can't determine which interface to use.
+            // AeroServer::sendFile() passes this directly to getaddrinfo() which correctly
+            // parses the scope-id and sets sockaddr_in6.sin6_scope_id via if_nametoindex().
+            return addr.debugDescription  // e.g. "fe80::aede:48ff:fe00:1122%en0"
         case .name(let n, _):
             return n
         @unknown default:

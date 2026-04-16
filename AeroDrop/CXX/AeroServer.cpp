@@ -23,6 +23,7 @@
 #include <chrono>
 #include <filesystem>
 #include <pwd.h>
+#include <netdb.h>           // getaddrinfo / freeaddrinfo
 
 namespace fs = std::filesystem;
 
@@ -143,7 +144,12 @@ void AeroServer::acceptLoop() {
 
         // Spawn a thread per connection so the accept loop stays hot
         std::thread([this, client_fd]() {
+            // ── Null-check: SSL_new can fail if memory is exhausted ──────────
             SSL* ssl = SSL_new(ssl_ctx_);
+            if (!ssl) {
+                fprintf(stderr, "[AeroServer] SSL_new failed — skipping connection\n");
+                close(client_fd); return;
+            }
             SSL_set_fd(ssl, client_fd);
             if (SSL_accept(ssl) != 1) {
                 ERR_print_errors_fp(stderr);
@@ -162,10 +168,23 @@ void AeroServer::acceptLoop() {
 // ── Incoming file handler ─────────────────────────────────────────────────────
 
 void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
-    // 1. Read 64-byte AeroHeader
+    // 1. Read exactly 64 bytes of AeroHeader.
+    //    SSL_read may return less than requested (one TLS record at a time),
+    //    so we loop until we have the full header.
     AeroHeader hdr{};
-    if (SSL_read(ssl, &hdr, sizeof(hdr)) != (int)sizeof(hdr)) {
-        fprintf(stderr, "[AeroServer] Short or failed header read\n"); return;
+    {
+        uint8_t* ptr   = reinterpret_cast<uint8_t*>(&hdr);
+        size_t   need  = sizeof(hdr);
+        size_t   got   = 0;
+        while (got < need) {
+            int n = SSL_read(ssl, ptr + got, (int)(need - got));
+            if (n <= 0) {
+                fprintf(stderr, "[AeroServer] Header read failed after %zu/%zu bytes\n",
+                        got, need);
+                return;
+            }
+            got += (size_t)n;
+        }
     }
 
     // 2. Validate magic bytes
@@ -194,22 +213,23 @@ void AeroServer::handleIncomingClient(int /*client_fd*/, SSL* ssl) {
     FILE* out_f = fopen(out_path.c_str(), "wb");
     if (!out_f) { perror("[AeroServer] fopen output"); return; }
 
-    // 6. Stream payload into file — 512 KiB buffer for large-file throughput
+    // 6. Stream payload — heap-allocated 512 KiB buffer (avoids any stack risk
+    //    on threads with non-default stack sizes)
+    auto     buf     = std::make_unique<uint8_t[]>(524288);
     uint64_t received = 0;
     auto     t_start  = std::chrono::steady_clock::now();
-    uint8_t  buf[524288]; // 512 KiB
 
     while (received < file_size) {
         uint64_t remaining = file_size - received;
-        int to_read = (int)std::min(remaining, (uint64_t)sizeof(buf));
-        int n = SSL_read(ssl, buf, to_read);
+        int to_read = (int)std::min(remaining, (uint64_t)524288);
+        int n = SSL_read(ssl, buf.get(), to_read);
         if (n <= 0) {
             int ssl_err = SSL_get_error(ssl, n);
             fprintf(stderr, "[AeroServer] SSL_read error %d after %llu/%llu bytes\n",
                     ssl_err, (unsigned long long)received, (unsigned long long)file_size);
             break;
         }
-        if (fwrite(buf, 1, (size_t)n, out_f) != (size_t)n) {
+        if (fwrite(buf.get(), 1, (size_t)n, out_f) != (size_t)n) {
             perror("[AeroServer] fwrite"); break;
         }
         received += (uint64_t)n;
@@ -261,12 +281,12 @@ int64_t AeroServer::kernelSendFile(int src_fd, int dst_socket, uint64_t file_siz
 // ── Outbound file send ────────────────────────────────────────────────────────
 
 void AeroServer::sendFile(const std::string& filepath,
-                          const std::string& peer_ip,
+                          const std::string& peer_host,
                           int                peer_port,
                           ProgressCallback   progress,
                           CompletionCallback done) {
     std::thread([=]() {
-        // --- Open source file ---
+        // ── Open source file ──────────────────────────────────────────────────
         int src_fd = open(filepath.c_str(), O_RDONLY);
         if (src_fd < 0) {
             if (done) done(false, std::string("Cannot open: ") + strerror(errno));
@@ -276,58 +296,59 @@ void AeroServer::sendFile(const std::string& filepath,
         lseek(src_fd, 0, SEEK_SET);
         std::string filename  = fs::path(filepath).filename().string();
 
-        // --- Connect (IPv6 first, fall back to IPv4) ---
-        // NWBrowser may resolve IPv6 link-local addresses (fe80::...%en0).
-        // Strip the scope-id before passing to inet_pton.
-        std::string clean_ip = peer_ip;
-        auto pct = clean_ip.find('%');
-        if (pct != std::string::npos) clean_ip = clean_ip.substr(0, pct);
+        // ── Resolve + connect via getaddrinfo ─────────────────────────────────
+        // getaddrinfo handles ALL address types on macOS:
+        //   • "192.168.1.x"           → plain IPv4
+        //   • "2001:db8::1"           → global IPv6
+        //   • "fe80::1%en0"           → link-local IPv6 with interface scope-id
+        //   • "phone.local."          → mDNS hostname
+        // The %scope-id is preserved by AeroDiscoveryBrowser so macOS can
+        // properly set sockaddr_in6.sin6_scope_id for link-local routing.
+        struct addrinfo hints{}, *res = nullptr;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_flags    = AI_NUMERICSERV;   // port is numeric, skip /etc/services
+        std::string port_str = std::to_string(peer_port);
 
-        int sock = -1;
-
-        // Try IPv6 first
-        struct sockaddr_in6 addr6{};
-        if (inet_pton(AF_INET6, clean_ip.c_str(), &addr6.sin6_addr) == 1) {
-            sock = socket(AF_INET6, SOCK_STREAM, 0);
-            addr6.sin6_family = AF_INET6;
-            addr6.sin6_port   = htons(peer_port);
-            int nb = 1;
-            setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
-            int sndbuf = 4 * 1024 * 1024;
-            setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-            if (connect(sock, (sockaddr*)&addr6, sizeof(addr6)) < 0) {
-                fprintf(stderr, "[AeroServer] IPv6 connect failed: %s\n", strerror(errno));
-                close(sock); sock = -1;
-            }
-        }
-
-        // Fall back to IPv4
-        if (sock < 0) {
-            struct sockaddr_in addr4{};
-            if (inet_pton(AF_INET, clean_ip.c_str(), &addr4.sin_addr) == 1) {
-                sock = socket(AF_INET, SOCK_STREAM, 0);
-                addr4.sin_family = AF_INET;
-                addr4.sin_port   = htons(peer_port);
-                int nb = 1;
-                setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
-                int sndbuf = 4 * 1024 * 1024;
-                setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-                if (connect(sock, (sockaddr*)&addr4, sizeof(addr4)) < 0) {
-                    fprintf(stderr, "[AeroServer] IPv4 connect failed: %s\n", strerror(errno));
-                    close(sock); sock = -1;
-                }
-            }
-        }
-
-        if (sock < 0) {
+        int gai_err = getaddrinfo(peer_host.c_str(), port_str.c_str(), &hints, &res);
+        if (gai_err != 0) {
+            fprintf(stderr, "[AeroServer] getaddrinfo('%s'): %s\n",
+                    peer_host.c_str(), gai_strerror(gai_err));
             close(src_fd);
-            if (done) done(false, "Cannot connect to " + peer_ip + ":" + std::to_string(peer_port));
+            if (done) done(false, std::string("DNS resolution failed: ") + gai_strerror(gai_err));
             return;
         }
 
-        // --- TLS handshake (client mode) ---
+        int sock = -1;
+        for (struct addrinfo* rp = res; rp && sock < 0; rp = rp->ai_next) {
+            int s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+            if (s < 0) continue;
+            int nb = 1;
+            setsockopt(s, IPPROTO_TCP, TCP_NODELAY, &nb, sizeof(nb));
+            int sndbuf = 4 * 1024 * 1024;
+            setsockopt(s, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
+            if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0) {
+                sock = s;
+            } else {
+                fprintf(stderr, "[AeroServer] connect attempt failed: %s\n", strerror(errno));
+                close(s);
+            }
+        }
+        freeaddrinfo(res);
+
+        if (sock < 0) {
+            close(src_fd);
+            if (done) done(false, "Cannot connect to " + peer_host + ":" + port_str);
+            return;
+        }
+
+        // ── TLS handshake (client mode) ───────────────────────────────────────
         SSL_CTX* cli_ctx = CertManager::createClientContext();
         SSL*     ssl     = SSL_new(cli_ctx);
+        if (!ssl) {
+            close(src_fd); close(sock); SSL_CTX_free(cli_ctx);
+            if (done) done(false, "SSL_new failed");
+            return;
+        }
         SSL_set_fd(ssl, sock);
         if (SSL_connect(ssl) != 1) {
             ERR_print_errors_fp(stderr);
@@ -337,7 +358,7 @@ void AeroServer::sendFile(const std::string& filepath,
             return;
         }
 
-        // --- Build and send AeroHeader ---
+        // ── Build and send AeroHeader ─────────────────────────────────────────
         AeroHeader hdr{};
         memcpy(hdr.magic, "AERO", 4);
         hdr.version   = 1;
@@ -346,33 +367,39 @@ void AeroServer::sendFile(const std::string& filepath,
         memcpy(hdr.filename, filename.c_str(), fname_len);
         hdr.checksum = adler32(reinterpret_cast<const uint8_t*>(hdr.filename), fname_len);
 
-        bool header_ok = (SSL_write(ssl, &hdr, sizeof(hdr)) == (int)sizeof(hdr));
-
-        if (!header_ok) {
+        if (SSL_write(ssl, &hdr, sizeof(hdr)) != (int)sizeof(hdr)) {
             if (done) done(false, "Header write failed");
-        } else {
-            // --- Stream payload (read → SSL_write) ---
-            auto     t_start = std::chrono::steady_clock::now();
-            uint64_t sent    = 0;
-            uint8_t  buf[524288]; // 512 KiB — large-file throughput
-            while (sent < file_size) {
-                ssize_t rd = read(src_fd, buf, sizeof(buf));
-                if (rd <= 0) break;
-                int wr = SSL_write(ssl, buf, (int)rd);
-                if (wr != (int)rd) {
-                    fprintf(stderr, "[AeroServer] SSL_write short write\n"); break;
-                }
-                sent += (uint64_t)wr;
-                if (progress) {
-                    auto   now = std::chrono::steady_clock::now();
-                    double sec = std::chrono::duration<double>(now - t_start).count();
-                    progress({ filename, sent, file_size,
-                                sec > 0.0 ? (sent / 1e6) / sec : 0.0 });
-                }
-            }
-            bool ok = (sent == file_size);
-            if (done) done(ok, ok ? "" : "Incomplete transfer");
+            SSL_shutdown(ssl); SSL_free(ssl); SSL_CTX_free(cli_ctx);
+            close(src_fd); close(sock);
+            return;
         }
+
+        // ── Stream payload (read file → SSL_write) ───────────────────────────
+        auto     buf     = std::make_unique<uint8_t[]>(524288); // 512 KiB heap
+        auto     t_start = std::chrono::steady_clock::now();
+        uint64_t sent    = 0;
+
+        while (sent < file_size) {
+            ssize_t rd = read(src_fd, buf.get(), 524288);
+            if (rd <= 0) break;
+            int wr = SSL_write(ssl, buf.get(), (int)rd);
+            if (wr != (int)rd) {
+                fprintf(stderr, "[AeroServer] SSL_write short write\n"); break;
+            }
+            sent += (uint64_t)wr;
+            if (progress) {
+                auto   now = std::chrono::steady_clock::now();
+                double sec = std::chrono::duration<double>(now - t_start).count();
+                progress({ filename, sent, file_size,
+                            sec > 0.0 ? (sent / 1e6) / sec : 0.0 });
+            }
+        }
+
+        bool ok = (sent == file_size);
+        printf("[AeroServer] Send %s: %llu/%llu bytes\n",
+               ok ? "complete" : "INCOMPLETE",
+               (unsigned long long)sent, (unsigned long long)file_size);
+        if (done) done(ok, ok ? "" : "Incomplete transfer");
 
         SSL_shutdown(ssl);
         SSL_free(ssl);
