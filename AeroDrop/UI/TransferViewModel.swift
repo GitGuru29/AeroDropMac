@@ -187,7 +187,11 @@ final class TransferViewModel: ObservableObject {
                 status: .running(progress: progress, bytesPerSecond: throughput)
             )
             incomingID = item.id
-            queue.insert(item, at: 0)
+            // Append, not insert at 0: arrival order is now identical for both
+            // directions, so the newest row is always in the same place.
+            withAnimation(TransferStyle.structural) {
+                queue.append(item)
+            }
         }
         publishWidgetState()
     }
@@ -238,7 +242,9 @@ final class TransferViewModel: ObservableObject {
             presentNotice("Skipped \(skipped) item\(skipped == 1 ? "" : "s") — folders aren’t supported")
         }
 
-        queue.append(contentsOf: items)
+        withAnimation(TransferStyle.structural) {
+            queue.append(contentsOf: items)
+        }
         advanceQueue()
         publishWidgetState(force: true)
     }
@@ -309,12 +315,16 @@ final class TransferViewModel: ObservableObject {
 
     func remove(_ item: TransferItem) {
         guard item.status == .pending else { return }
-        queue.removeAll { $0.id == item.id }
+        withAnimation(TransferStyle.structural) {
+            queue.removeAll { $0.id == item.id }
+        }
         publishWidgetState()
     }
 
     func clearFinished() {
-        queue.removeAll { $0.status.isTerminal }
+        withAnimation(TransferStyle.structural) {
+            queue.removeAll { $0.status.isTerminal }
+        }
         publishWidgetState()
     }
 
@@ -399,6 +409,19 @@ final class TransferViewModel: ObservableObject {
         }
 
         WidgetBridge.shared.publish(peerName: selectedPeer?.name, transfer: snapshot, force: force)
+
+        // Keep the menu bar in step with whichever direction is live, so the
+        // panel can be dismissed without losing all visibility.
+        let activityDirection: TransferItem.Direction = activeItem?.direction ?? .outgoing
+        let activityProgress = snapshot.status == .completed ? 1 : snapshot.progress
+        let isLive = activeItem != nil
+        if isLive || activityProgress > 0 {
+            TransferActivity.shared.update(
+                isTransferring: isLive,
+                progress: isLive ? activityProgress : 0,
+                direction: activityDirection
+            )
+        }
     }
 
     // ── Notice ──────────────────────────────────────────────────────────────
