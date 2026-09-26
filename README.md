@@ -19,8 +19,10 @@ project; this side is useless without it.
 | Network | Both devices on the same LAN, same subnet |
 | Firewall | macOS will prompt to accept incoming connections on first launch |
 
-The app is a **menu bar extra** — there is no Dock icon and no main window.
-Click the antenna glyph in the menu bar to open the panel.
+The app is a **menu bar extra** — there is no Dock icon and no main window. Click
+the antenna glyph in the menu bar to open the panel, or add the widget to your
+desktop and Notification Center to send and monitor transfers without opening
+anything at all. See [Widgets](#widgets) for what it can and can't do.
 
 ## Build
 
@@ -39,18 +41,31 @@ Or from the command line, once the xcconfig is wired up:
 xcodebuild -scheme AeroDrop -configuration Debug build
 ```
 
+The project has two targets. `AeroDropWidgets` (the widget extension) is built
+automatically as a dependency of the app and embedded at
+`AeroDrop.app/Contents/PlugIns/AeroDropWidgets.appex` — nothing to wire up. It
+links no OpenSSL, so it needs no xcconfig; build it alone with
+`-scheme AeroDropWidgets` if you want to iterate on the widget quickly.
+
+> The script is a convenience, not a requirement. `project.pbxproj` already
+> hardcodes the OpenSSL search paths, so `xcodebuild` works on a clean checkout
+> without ever running it. Running it just refreshes them for your Homebrew
+> prefix.
+>
 > The project uses a file-system-synchronized group, so new files under
-> `AeroDrop/` are picked up automatically — there is no "add files to target"
-> step. Note that `xcode-setup.sh` still prints the older manual
-> instructions, and its suggested `MACOSX_DEPLOYMENT_TARGET = 13.0` is stale;
-> the project itself is set to 26.2.
+> `AeroDrop/`, `AeroDropWidgets/` and `AeroDropShared/` are picked up
+> automatically — there is no "add files to target" step. Note that
+> `xcode-setup.sh` still prints the older manual instructions, and its
+> suggested `MACOSX_DEPLOYMENT_TARGET = 13.0` is stale; the project itself is
+> set to 26.2.
 
 ## Using it
 
 1. Open AeroDrop on both devices. The Mac starts advertising `_aerodrop._tcp`
    on port **7770** immediately at launch.
-2. Your Android device appears in the **Devices** sidebar and is selected
-   automatically. Click another row to switch.
+2. Your Android device appears in the **Devices** sidebar and is selected for
+   you. AeroDrop re-selects the device you used last, so after a relaunch it's
+   already pointing at the right one; click another row to switch.
 3. Drop one or more files onto the panel, or press `⌘O` to pick them.
 
 Transfers are **serialized through a queue** — drop twenty files and they go one
@@ -62,6 +77,9 @@ and clear finished items when you're done. Received files land in
 The panel is resizable (drag the corner, or the title bar to move it) and
 remembers its size. It opens by itself on first launch so the app isn't
 mysteriously invisible, then stays out of the way.
+
+You can also skip the panel entirely: add the widget to your desktop or
+Notification Center and drag files straight onto it.
 
 ### Pairing
 
@@ -154,14 +172,22 @@ under `AeroDrop/`, `AeroDropWidgets/` and `AeroDropShared/` join their targets
 automatically.
 
 ```
-AeroDropWidgets/             WidgetKit extension (see "Widgets" above)
+AeroDropWidgets/             WidgetKit extension (see "Widgets" below)
   AeroDropWidget            One widget, three modes across four families
   Intents/                  Mode parameter + the drop hand-off
 AeroDropShared/
   AeroWidgetState           Codable snapshot shared with the widget
 ```
 
-### Widgets
+### A note on throughput
+
+`speed_mbps` in `AeroServer.h` is never assigned and is always `0.0`; the one
+code path that did compute a rate reported MB/s, not Mbps. Rather than change
+the transport, the UI derives throughput in Swift from byte deltas between
+progress callbacks (`ThroughputMeter`), smoothed with an EWMA. The C++ field is
+dead and could be removed.
+
+## Widgets
 
 `AeroDropWidgets` is a WidgetKit extension offering a single widget with a
 configurable mode, rendered at small, medium, large and extra-large:
@@ -171,6 +197,23 @@ configurable mode, rendered at small, medium, large and extra-large:
 - **Recent Files** — what you sent last, to the current device.
 
 Right-click the widget → Edit Widget to switch mode.
+
+The extension and the app are separate processes that can only communicate
+through one JSON file, and only in one direction at a time:
+
+```
+┌──────────────────────────┐        ┌─────────────────────────────┐
+│ AeroDrop.app             │        │ AeroDropWidgets.appex       │
+│                          │        │                             │
+│ TransferViewModel        │ write  │  AeroDropWidgetProvider     │
+│   └─ WidgetBridge ───────┼───────►│      └─ renders snapshot    │
+│                          │        │                             │
+│  1.5 s poll ─────────────┼───────►│  DropVariant                │
+│   └─ takePendingDrop()   │  read  │      └─ dropDestination     │
+│      └─ enqueue + send   │        │         writes pendingDrop  │
+└──────────────────────────┘        └─────────────────────────────┘
+      aerodrop_widget_state.json  ── the only channel ──►
+```
 
 Two things widgets fundamentally cannot do, so this design leans on them
 instead of fighting them:
@@ -212,7 +255,7 @@ Two details worth knowing if you touch this:
   `com.apple.security.application-groups = [group.com.siluna.AeroDrop]` to both
   entitlements files, and set `ENABLE_APP_SANDBOX = YES` on the extension.
 
-### Nearest device by default
+## Nearest device by default
 
 To reduce taps, AeroDrop remembers the device you last used and re-selects it
 on relaunch, falling back to the first device discovered. The sidebar still
@@ -224,11 +267,3 @@ the network during discovery — which crashes the Android client's
 `SSLServerSocket`, a constraint the code comments call out. So "nearest" means
 "last used, else first found", and the naming is deliberately worded that way in
 the code.
-
-### A note on throughput
-
-`speed_mbps` in `AeroServer.h` is never assigned and is always `0.0`; the one
-code path that did compute a rate reported MB/s, not Mbps. Rather than change
-the transport, the UI derives throughput in Swift from byte deltas between
-progress callbacks (`ThroughputMeter`), smoothed with an EWMA. The C++ field is
-dead and could be removed.
