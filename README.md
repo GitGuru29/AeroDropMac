@@ -81,6 +81,36 @@ mysteriously invisible, then stays out of the way.
 You can also skip the panel entirely: add the widget to your desktop or
 Notification Center and drag files straight onto it.
 
+### Sending and receiving look the same
+
+Every visual decision about a transfer lives in one file, `TransferStyle.swift`,
+and both directions run the same code path. The only intended differences are
+the arrow (`arrow.up.to.line` / `arrow.down.to.line`) and the verb — the tint,
+progress bar, animations, row layout and summary treatment are literally the
+same code. Direction is never signalled by colour, so the two can't drift apart
+visually.
+
+| | |
+|---|---|
+| Row layout | identical; a direction glyph on every row so inbound and outbound are distinguishable without reading text |
+| Progress | one `TransferProgressBar` used for the queue, the row, and the status icon |
+| Animations | rows slide in and out, the bar eases toward each ~100 ms tick, completion gets a tint wash and a single bounce |
+| Summary | the active transfer is described by the same three lines whichever way it is going |
+| Menu bar | `TransferActivity` mirrors any in-flight transfer as a percentage, so closing the panel never hides it |
+
+The bar is `easeOut(0.22)` — long enough to smooth the 100 ms progress callbacks
+into continuous motion, short enough not to lag a stall. An active transfer that
+hasn't reported a fraction yet shows a moving highlight rather than sitting at
+zero, which otherwise reads as broken.
+
+Rows are appended in arrival order for both directions. Incoming transfers used
+to be inserted at index 0 while outgoing appended, which meant the newest row was
+at the top for one direction and the bottom for the other; the active row is now
+scrolled into view instead of relying on position.
+
+The menu bar indicator is deliberately direction-neutral — it shows a percentage,
+not an arrow, because it only needs to say *busy*.
+
 ### Pairing
 
 There is no pairing step. Each device generates its own self-signed
@@ -161,6 +191,8 @@ AeroDrop/
     TransferQueueView      Queue summary and per-item rows
     TransferViewModel      Serialization, discovery wiring, throughput
     TransferItem           Queue item model + ThroughputMeter
+    TransferStyle          Shared send/receive presentation + animated bar
+    TransferActivity       Transfer state mirrored into the menu bar
     StatusPanelController  NSStatusItem + resizable AeroPanel
     WidgetBridge           Shared-state writer, peer memory, drop hand-off
     Theme                  Colors, spacing, byte/duration formatting

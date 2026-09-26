@@ -36,6 +36,12 @@ struct DropTargetView: View {
                   : "Choose files to send to \(model.selectedPeer!.name)")
 
             Spacer(minLength: 0)
+
+            // Sending has a device; receiving does not, because the wire format
+            // does not tell us who connected. Stating that readiness explicitly
+            // keeps the two directions symmetrical instead of sending-only.
+            receiveReadiness
+                .padding(.top, Theme.spacingXS)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Theme.spacingLG)
@@ -49,6 +55,48 @@ struct DropTargetView: View {
             Task { await model.handleDrop(providers) }
             return true
         }
+    }
+
+    private var receiveReadiness: some View {
+        HStack(spacing: Theme.spacingXS) {
+            Image(systemName: receiveSymbol)
+                .font(.caption)
+                .foregroundStyle(receiveTint)
+                .contentTransition(.symbolEffect(.replace))
+
+            Text(receiveText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer()
+        }
+        .padding(.horizontal, Theme.spacingSM)
+        .padding(.vertical, Theme.spacingXS)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Theme.surfaceHover)
+        )
+        .animation(.easeOut(duration: 0.2), value: model.serverState)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var isListening: Bool {
+        if case .running = model.serverState { return true }
+        return false
+    }
+
+    private var receiveSymbol: String {
+        isListening ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
+    }
+
+    private var receiveTint: Color {
+        isListening ? Color.green : Color.secondary
+    }
+
+    private var receiveText: String {
+        isListening
+            ? "Ready to receive — files arrive in this panel"
+            : "Not listening — port 7770 unavailable"
     }
 
     private var dropBackdrop: some View {

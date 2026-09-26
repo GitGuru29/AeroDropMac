@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 final class AeroPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -12,6 +13,7 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var panel: NSPanel?
     private var outsideClickMonitor: Any?
+    private var activitySub: AnyCancellable?
 
     private static let defaultSize = NSSize(width: 640, height: 540)
     private static let minSize     = NSSize(width: 460, height: 340)
@@ -47,6 +49,9 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
         panel.delegate = self
         panel.contentView = NSHostingView(rootView: RootView())
         self.panel = panel
+
+        observeActivity()
+        refreshStatusItem()
 
         // A menu bar app has no window of its own, so on first run the panel is
         // opened once to make the app discoverable instead of leaving the user
@@ -116,6 +121,44 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
         statusItem?.button?.menu = menu
         statusItem?.button?.performClick(nil)
         statusItem?.button?.menu = nil
+    }
+
+    // ── Menu bar activity ───────────────────────────────────────────────────
+
+    /// Mirrors an in-flight transfer into the status item so dismissing the
+    /// panel never hides that bytes are still moving. The percentage is
+    /// deliberately direction-neutral: the panel and the widget carry the
+    /// arrow, the menu bar only needs to say "busy".
+    private func observeActivity() {
+        activitySub = TransferActivity.shared
+            .objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshStatusItem() }
+    }
+
+    private func refreshStatusItem() {
+        guard let button = statusItem?.button else { return }
+        let activity = TransferActivity.shared
+
+        if activity.isTransferring {
+            button.image = NSImage(
+                systemSymbolName: "arrow.up.arrow.down.circle.fill",
+                accessibilityDescription: "Transferring"
+            )
+            button.title = " \(Int((activity.progress * 100).rounded()))%"
+            button.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            button.imagePosition = .imageLeading
+            button.toolTip = "AeroDrop — transferring, \(Int((activity.progress * 100).rounded()))%"
+        } else {
+            button.image = NSImage(
+                systemSymbolName: "antenna.radiowaves.left.and.right",
+                accessibilityDescription: "AeroDrop"
+            )
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.toolTip = "AeroDrop"
+        }
+        button.image?.isTemplate = true
     }
 
     @objc private func toggleFromMenu() {
