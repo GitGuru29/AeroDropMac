@@ -1,255 +1,177 @@
 // AeroDiscoveryBrowser.swift — AeroDrop  [Phase 1: Discovery Layer]
-// Browses the local network for _aerodrop._tcp services using Network.framework's
-// NWBrowser (macOS 10.15+). Publishes live peers as @Published state so the
-// DropZoneViewModel can drive the sidebar without polling.
+// Browses the local network for _aerodrop._tcp services using NetServiceBrowser.
+// Publishes live peers as @Published state so the view model can drive the sidebar.
 //
 // Key design decisions:
-// ① Self-filter: NWBrowser discovers ALL _aerodrop._tcp services, including the
-//   one this Mac registers. We compare each service name against the Mac's own
-//   Bonjour name (Host.current().localizedName) and skip it. Without this, the
-//   user's peer list contains "siluna's MacBook Air" alongside Android devices,
-//   it gets auto-selected, and every send fails with "TLS handshake failed"
-//   because the Mac is connecting to its own AeroServer.
-//
-// ② Cancel at .preparing (not .ready): we only need the mDNS-resolved IP.
-//   At .preparing the DNS query has completed and currentPath.remoteEndpoint
-//   already contains the resolved address — the TCP three-way handshake hasn't
-//   finished yet. Cancelling here avoids delivering a plain-TCP connection to
-//   the peer's TLS server, which would trigger spurious SSLHandshakeExceptions
-//   on Android and "unexpected EOF" SSL errors in the Mac's own AeroServer logs.
+// ① Self-filter: NetServiceBrowser discovers ALL _aerodrop._tcp services. We compare 
+//   each service name against the Mac's own Bonjour name and skip it.
+// ② Pure resolution: We use NetService to resolve the IP address instead of NWConnection 
+//   to avoid triggering premature TCP handshakes that crash Android's SSLServerSocket
+//   and cause indefinite stalls on the Mac side.
+// ③ Stable identity: AeroPeerInfo.id is the mDNS instance name, so a re-resolve that
+//   returns the same address is a no-op and an address change updates the existing row
+//   in place rather than churning SwiftUI identity and dropping the user's selection.
 
-import Network
+import Foundation
 import Combine
-import Foundation    // Host
+
+extension NetService: @unchecked Sendable {}
 
 @MainActor
-final class AeroDiscoveryBrowser: ObservableObject {
+final class AeroDiscoveryBrowser: NSObject, ObservableObject {
 
     // ── Public state ──────────────────────────────────────────────────────────
     @Published private(set) var peers: [AeroPeerInfo] = []
 
     // ── Private ───────────────────────────────────────────────────────────────
-    private var browser:   NWBrowser?
-    private var resolvers: [String: NWConnection] = [:]   // name → active resolver
-    private var discovered:[String: AeroPeerInfo] = [:]   // name → resolved peer
+    private var browser: NetServiceBrowser?
+    private var activeServices: [String: NetService] = [:]
+    private var discovered: [String: AeroPeerInfo] = [:]
 
-    private static let serviceType = "_aerodrop._tcp"
-    private static let queue       = DispatchQueue(label: "com.aerodrop.discovery",
-                                                   qos: .utility)
+    private static let serviceType = "_aerodrop._tcp."
+    private static let domain      = "local."
 
     // ① The service instance name this Mac advertises on _aerodrop._tcp.
-    //   BonjourService uses `Host.current().localizedName` (e.g. "siluna's MacBook Air").
-    //   NWBrowser sees that exact string as the result name. We store it once at
-    //   init time and skip any result whose name matches.
     private let localServiceName: String = {
         Host.current().localizedName ?? ""
     }()
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    override init() {
+        super.init()
+    }
+
     func startBrowsing() {
         guard browser == nil else { return }
 
-        let params       = NWParameters()
-        params.includePeerToPeer = false   // LAN only
-
-        let descriptor   = NWBrowser.Descriptor.bonjourWithTXTRecord(
-            type:   Self.serviceType,
-            domain: "local."
-        )
-
-        let b = NWBrowser(for: descriptor, using: params)
-
-        b.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor [weak self] in
-                switch state {
-                case .ready:
-                    print("[AeroDiscovery] Browser ready")
-                case .failed(let err):
-                    print("[AeroDiscovery] Browser failed: \(err)")
-                    self?.restartBrowsing()
-                case .cancelled:
-                    print("[AeroDiscovery] Browser cancelled")
-                default:
-                    break
-                }
-            }
-        }
-
-        b.browseResultsChangedHandler = { [weak self] results, changes in
-            Task { @MainActor [weak self] in
-                self?.handleBrowseChanges(changes)
-            }
-        }
-
-        b.start(queue: Self.queue)
-        browser = b
-        print("[AeroDiscovery] Browsing for \(Self.serviceType)")
+        browser = NetServiceBrowser()
+        browser?.delegate = self
+        browser?.searchForServices(ofType: Self.serviceType, inDomain: Self.domain)
+        print("[AeroDiscovery] Browsing for \(Self.serviceType) using NetServiceBrowser")
     }
 
     func stopBrowsing() {
-        browser?.cancel()
+        browser?.stop()
         browser = nil
 
-        resolvers.values.forEach { $0.cancel() }
-        resolvers.removeAll()
+        activeServices.values.forEach { $0.stop() }
+        activeServices.removeAll()
 
         discovered.removeAll()
         peers = []
         print("[AeroDiscovery] Stopped")
     }
 
-    // ── Browse result handling ─────────────────────────────────────────────────
+    // ── Extract and store peer ────────────────────────────────────────────────
 
-    private func handleBrowseChanges(_ changes: Set<NWBrowser.Result.Change>) {
-        for change in changes {
-            switch change {
-            case .added(let result):
-                resolveResult(result)
-            case .removed(let result):
-                if case .service(let name, _, _, _) = result.endpoint {
-                    removePeer(named: name)
+    private func extractAndStore(service: NetService) {
+        guard let addresses = service.addresses, !addresses.isEmpty else { return }
+        
+        // Prefer IPv4
+        var resolvedIP: String?
+        for addrData in addresses {
+            let ip = addrData.withUnsafeBytes { ptr -> String? in
+                let sockaddrPtr = ptr.bindMemory(to: sockaddr.self).baseAddress!
+                // Skip IPv6 for Android compatibility, as Android binds to 0.0.0.0
+                if sockaddrPtr.pointee.sa_family == sa_family_t(AF_INET) {
+                    var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(sockaddrPtr, socklen_t(addrData.count), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
+                        return String(cString: hostname)
+                    }
                 }
-            case .changed(old: _, new: let result, flags: _):
-                resolveResult(result)
-            @unknown default:
+                return nil
+            }
+            if let ip = ip {
+                resolvedIP = ip
                 break
             }
         }
-    }
-
-    // ── Resolve: service endpoint → host + port ────────────────────────────────
-
-    private func resolveResult(_ result: NWBrowser.Result) {
-        guard case .service(let name, let type, let domain, _) = result.endpoint else { return }
-
-        // ① Self-filter ─────────────────────────────────────────────────────────
-        // Skip our own Mac service so it never appears in the peer list.
-        if !localServiceName.isEmpty && name == localServiceName {
-            print("[AeroDiscovery] Skipping self: \(name)")
-            return
-        }
-
-        // Avoid double-resolving the same service instance
-        if resolvers[name] != nil { return }
-
-        print("[AeroDiscovery] Resolving: \(name).\(type)\(domain)")
-
-        // Force IPv4 so we get Android's IPv4 address (e.g. 10.54.x.x) rather than
-        // its IPv6 link-local (fe80::...). Android's SSLServerSocket listens on
-        // 0.0.0.0:7770 (IPv4 only) — connecting via IPv6 link-local gets refused.
-        //
-        // NWProtocolIP.Options has no public initializer; we must obtain the existing
-        // instance from within NWParameters.tcp and modify it before using it.
-        let connParams = NWParameters.tcp
-        if let ipOpts = connParams.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
-            ipOpts.version = .v4       // prefer IPv4 resolution
-        }
-
-        let endpoint = NWEndpoint.service(name: name, type: type,
-                                          domain: domain, interface: nil)
-        let conn = NWConnection(to: endpoint, using: connParams)
-
-        resolvers[name] = conn
-
-        conn.stateUpdateHandler = { [weak self, weak conn, name] state in
-            Task { @MainActor [weak self, weak conn] in
-                guard let self else { return }
-                switch state {
-
-                case .preparing:
-                    // ② Cancel at .preparing ─────────────────────────────────────
-                    // At this stage mDNS has resolved the hostname → IP address and
-                    // currentPath.remoteEndpoint holds the resolved address, BUT the
-                    // TCP three-way handshake has NOT yet completed. Cancelling now:
-                    //  • Prevents a live TCP socket from reaching Android's
-                    //    SSLServerSocket.accept() and triggering startHandshake().
-                    //  • Prevents the Mac's own AeroServer from seeing a plain-TCP
-                    //    connection that causes "unexpected EOF" in SSL_accept().
-                    if let path = conn?.currentPath, let remote = path.remoteEndpoint {
-                        self.extractAndStore(name: name, endpoint: remote)
-                        conn?.cancel()
-                        self.resolvers[name] = nil
+        
+        // If no IPv4 found, fall back to IPv6 (we might need the %scope_id)
+        if resolvedIP == nil {
+            for addrData in addresses {
+                let ip = addrData.withUnsafeBytes { ptr -> String? in
+                    let sockaddrPtr = ptr.bindMemory(to: sockaddr.self).baseAddress!
+                    if sockaddrPtr.pointee.sa_family == sa_family_t(AF_INET6) {
+                        var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                        // Include scope id with NI_NUMERICHOST
+                        if getnameinfo(sockaddrPtr, socklen_t(addrData.count), &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST) == 0 {
+                            return String(cString: hostname)
+                        }
                     }
-                    // If the endpoint isn't available yet, fall through to .ready.
-
-                case .ready:
-                    // Fallback: connection fully established — extract then tear down.
-                    if let path = conn?.currentPath, let remote = path.remoteEndpoint {
-                        self.extractAndStore(name: name, endpoint: remote)
-                    }
-                    conn?.cancel()
-                    self.resolvers[name] = nil
-
-                case .failed(let err):
-                    print("[AeroDiscovery] Resolve failed for \(name): \(err)")
-                    self.resolvers[name] = nil
-
-                case .cancelled:
-                    self.resolvers[name] = nil
-
-                default:
+                    return nil
+                }
+                if let ip = ip {
+                    resolvedIP = ip
                     break
                 }
             }
         }
 
-        conn.start(queue: Self.queue)
-    }
+        guard let finalIP = resolvedIP else { return }
 
-    // ── Store resolved peer ────────────────────────────────────────────────────
+        let peer = AeroPeerInfo(
+            name: service.name,
+            host: finalIP,
+            port: service.port
+        )
 
-    private func extractAndStore(name: String, endpoint: NWEndpoint) {
-        switch endpoint {
-        case .hostPort(let host, let port):
-            let hostStr = hostString(from: host)
-            let portInt = Int(port.rawValue)
-            guard !hostStr.isEmpty, portInt > 0, portInt != 65535 else { return }
-
-            let peer = AeroPeerInfo(id: UUID(), name: name,
-                                    host: hostStr, port: portInt)
-            if discovered[name] == peer { return }   // No-op if unchanged
-            discovered[name] = peer
-            peers = discovered.values.sorted { $0.name < $1.name }
-            print("[AeroDiscovery] Peer ready: \(name) @ \(hostStr):\(portInt)")
-        default:
-            break
-        }
-    }
-
-    private func removePeer(named name: String) {
-        resolvers[name]?.cancel()
-        resolvers[name] = nil
-        discovered.removeValue(forKey: name)
+        if discovered[service.name] == peer { return }
+        discovered[service.name] = peer
         peers = discovered.values.sorted { $0.name < $1.name }
-        print("[AeroDiscovery] Peer lost: \(name)")
+        print("[AeroDiscovery] Peer ready: \(service.name) @ \(finalIP):\(service.port)")
     }
+}
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+// ── NetServiceBrowserDelegate & NetServiceDelegate ──────────────────────────
+extension AeroDiscoveryBrowser: NetServiceBrowserDelegate, NetServiceDelegate {
 
-    private func hostString(from host: NWEndpoint.Host) -> String {
-        switch host {
-        case .ipv4(let addr):
-            return addr.debugDescription
-        case .ipv6(let addr):
-            // Keep the full address INCLUDING the %scope-id (e.g. "fe80::1%en0").
-            // Stripping it produces an un-routable link-local address — connect()
-            // fails with ENETUNREACH because the kernel can't determine which
-            // interface to use. AeroServer::sendFile() passes this to getaddrinfo()
-            // which correctly parses the scope-id and sets sin6_scope_id.
-            return addr.debugDescription  // e.g. "fe80::aede:48ff:fe00:1122%en0"
-        case .name(let n, _):
-            return n
-        @unknown default:
-            return ""
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
+        Task { @MainActor in
+            // Self-filter
+            if !self.localServiceName.isEmpty && service.name == self.localServiceName {
+                print("[AeroDiscovery] Skipping self: \(service.name)")
+                return
+            }
+
+            print("[AeroDiscovery] Found: \(service.name)")
+            self.activeServices[service.name] = service
+            service.delegate = self
+            service.resolve(withTimeout: 10.0)
         }
     }
 
-    private func restartBrowsing() {
-        browser?.cancel()
-        browser = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
-            self?.startBrowsing()
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
+        Task { @MainActor in
+            print("[AeroDiscovery] Peer lost: \(service.name)")
+            self.activeServices[service.name]?.stop()
+            self.activeServices.removeValue(forKey: service.name)
+            self.discovered.removeValue(forKey: service.name)
+            self.peers = self.discovered.values.sorted { $0.name < $1.name }
+        }
+    }
+
+    nonisolated func netServiceDidResolveAddress(_ sender: NetService) {
+        Task { @MainActor in
+            self.extractAndStore(service: sender)
+        }
+    }
+
+    nonisolated func netService(_ sender: NetService, didNotResolve errorDict: [String : NSNumber]) {
+        Task { @MainActor in
+            print("[AeroDiscovery] Resolve failed for \(sender.name): \(errorDict)")
+            self.activeServices.removeValue(forKey: sender.name)
+        }
+    }
+    
+    nonisolated func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String : NSNumber]) {
+        Task { @MainActor in
+            print("[AeroDiscovery] Browser failed: \(errorDict)")
+            self.stopBrowsing()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                self.startBrowsing()
+            }
         }
     }
 }

@@ -1,0 +1,330 @@
+import SwiftUI
+import AppKit
+import Combine
+import UniformTypeIdentifiers
+
+@MainActor
+final class TransferViewModel: ObservableObject {
+
+    enum ServerState: Equatable {
+        case idle
+        case starting
+        case running
+        case failed(String)
+    }
+
+    @Published private(set) var peers: [AeroPeerInfo] = []
+    @Published private(set) var queue: [TransferItem] = []
+    @Published var selectedPeer: AeroPeerInfo? {
+        // Re-selecting a device must resume a queue that stalled while no
+        // peer was selected, otherwise pending items never start.
+        didSet { if oldValue != selectedPeer { advanceQueue() } }
+    }
+    @Published var isDropTargeted = false
+    @Published private(set) var certFingerprint = ""
+    @Published private(set) var serverState: ServerState = .idle
+    @Published private(set) var advertisementError: String?
+    @Published private(set) var notice: String?
+
+    private let server: BridgeServer = .shared()
+    private let bonjour: BonjourService = .shared
+    private let browser = AeroDiscoveryBrowser()
+
+    private var peerSub: AnyCancellable?
+    private var bonjourSub: AnyCancellable?
+    private var noticeWorkItem: DispatchWorkItem?
+
+    private var outgoingMeter = ThroughputMeter()
+    private var incomingMeter = ThroughputMeter()
+    private var activeOutgoingID: UUID?
+    private var incomingID: UUID?
+    private var hasStarted = false
+
+    // ── Derived state ──────────────────────────────────────────────────────
+
+    var pendingCount: Int { queue.filter { $0.status == .pending }.count }
+    var isTransferring: Bool { queue.contains { $0.status.isRunning } }
+    var hasFinishedItems: Bool { queue.contains { $0.status.isTerminal } }
+
+    var activeItem: TransferItem? {
+        queue.first { $0.status.isRunning }
+    }
+
+    var overallProgress: Double {
+        let relevant = queue.filter { $0.direction == .incoming || $0.status == .completed }
+            + queue.filter { $0.direction == .outgoing && !$0.status.isTerminal }
+        guard !relevant.isEmpty else { return 0 }
+        let total = relevant.reduce(0.0) { $0 + Double($1.totalBytes) }
+        guard total > 0 else { return 0 }
+        let done = relevant.reduce(0.0) { $0 + Double($1.bytesTransferred) }
+        return min(1, done / total)
+    }
+
+    /// New files may be enqueued at any time; advanceQueue serializes them.
+    var canEnqueue: Bool { selectedPeer != nil }
+
+    // ── Lifecycle ───────────────────────────────────────────────────────────
+
+    func start() {
+        guard !hasStarted else { return }
+        hasStarted = true
+
+        certFingerprint = server.certFingerprint()
+        installTransferCallbacks()
+        subscribeToDiscovery()
+        browser.startBrowsing()
+        bonjour.startAdvertising()
+        startServer()
+    }
+
+    func shutdown() {
+        browser.stopBrowsing()
+        peerSub?.cancel()
+        bonjourSub?.cancel()
+        server.stop()
+        bonjour.stopAdvertising()
+        hasStarted = false
+    }
+
+    private func startServer() {
+        serverState = .starting
+        // RSA-4096 key generation on first launch takes up to 30 s and must NOT
+        // block the main thread, so the listener is brought up off-actor.
+        let server = self.server
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = server.start()
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.serverState = ok ? .running : .failed("Could not open port 7770")
+            }
+        }
+    }
+
+    private func installTransferCallbacks() {
+        server.incomingProgressHandler = { [weak self] p in
+            self?.handleIncomingProgress(p)
+        }
+        server.incomingCompletionHandler = { [weak self] success, error in
+            self?.handleIncomingCompletion(success: success, error: error)
+        }
+    }
+
+    private func subscribeToDiscovery() {
+        peerSub = browser.$peers
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newPeers in
+                guard let self else { return }
+                self.peers = newPeers
+                if let selected = self.selectedPeer, !newPeers.contains(selected) {
+                    self.selectedPeer = newPeers.first
+                }
+                if self.selectedPeer == nil {
+                    self.selectedPeer = newPeers.first
+                }
+            }
+
+        bonjourSub = bonjour.$registrationError
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in
+                self?.advertisementError = error
+            }
+    }
+
+    // ── Inbound ─────────────────────────────────────────────────────────────
+
+    private func handleIncomingProgress(_ p: AeroTransferProgress) {
+        guard p.totalBytes > 0 else { return }
+        let throughput = incomingMeter.sample(bytesTransferred: p.bytesTransferred)
+        let progress = min(1, Double(p.bytesTransferred) / Double(p.totalBytes))
+
+        if let incomingID, let index = queue.firstIndex(where: { $0.id == incomingID }) {
+            queue[index].status = .running(progress: progress, bytesPerSecond: throughput)
+        } else {
+            incomingMeter.reset()
+            // The inbound path doesn't report which device connected, so this
+            // must not borrow the selected peer's name.
+            let item = TransferItem(
+                filename: p.filename,
+                totalBytes: p.totalBytes,
+                direction: .incoming,
+                peerName: "Nearby device",
+                status: .running(progress: progress, bytesPerSecond: throughput)
+            )
+            incomingID = item.id
+            queue.insert(item, at: 0)
+        }
+    }
+
+    private func handleIncomingCompletion(success: Bool, error: String?) {
+        guard let id = incomingID, let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
+        queue[index].finishedAt = Date()
+        incomingID = nil
+        incomingMeter.reset()
+    }
+
+    // ── Outbound queue ──────────────────────────────────────────────────────
+
+    func enqueue(urls: [URL]) {
+        guard let peer = selectedPeer else {
+            presentNotice("Select a device first")
+            return
+        }
+
+        var items: [TransferItem] = []
+        var skipped = 0
+
+        for url in urls {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  values.isRegularFile == true,
+                  let size = values.fileSize,
+                  size >= 0 else {
+                skipped += 1
+                continue
+            }
+            items.append(TransferItem(
+                filename: url.lastPathComponent,
+                totalBytes: UInt64(size),
+                direction: .outgoing,
+                peerName: peer.name,
+                sourceURL: url
+            ))
+        }
+
+        guard !items.isEmpty else {
+            presentNotice("Only files can be sent")
+            return
+        }
+        if skipped > 0 {
+            presentNotice("Skipped \(skipped) item\(skipped == 1 ? "" : "s") — folders aren’t supported")
+        }
+
+        queue.append(contentsOf: items)
+        advanceQueue()
+    }
+
+    private func advanceQueue() {
+        guard activeOutgoingID == nil else { return }
+        guard let index = queue.firstIndex(where: { $0.status == .pending && $0.isOutgoing }) else { return }
+        guard let peer = selectedPeer else { return }
+
+        let item = queue[index]
+        activeOutgoingID = item.id
+        outgoingMeter.reset()
+        queue[index].startedAt = Date()
+        queue[index].status = .running(progress: 0, bytesPerSecond: 0)
+
+        guard let path = item.sourceURL?.path else {
+            queue[index].status = .failed("File is no longer available")
+            queue[index].finishedAt = Date()
+            activeOutgoingID = nil
+            advanceQueue()
+            return
+        }
+
+        let server = self.server
+        let host = peer.host
+        let port = Int32(peer.port)
+        let id = item.id
+
+        server.sendFile(
+            atPath: path,
+            toHost: host,
+            port: port,
+            progress: { [weak self] p in
+                self?.updateOutgoing(id: id, progress: p)
+            },
+            completion: { [weak self] success, error in
+                // BridgeServer guarantees main-queue delivery, so update the
+                // queue synchronously to keep completion → next-item ordering.
+                MainActor.assumeIsolated {
+                    self?.finishOutgoing(id: id, success: success, error: error)
+                }
+            }
+        )
+    }
+
+    private func updateOutgoing(id: UUID, progress p: AeroTransferProgress) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        let throughput = outgoingMeter.sample(bytesTransferred: p.bytesTransferred)
+        let fraction = p.totalBytes > 0
+            ? min(1, Double(p.bytesTransferred) / Double(p.totalBytes))
+            : min(1, max(0, p.fraction))
+        queue[index].status = .running(progress: fraction, bytesPerSecond: throughput)
+    }
+
+    private func finishOutgoing(id: UUID, success: Bool, error: String?) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
+        queue[index].finishedAt = Date()
+        if activeOutgoingID == id { activeOutgoingID = nil }
+        outgoingMeter.reset()
+        advanceQueue()
+    }
+
+    // ── Queue editing ───────────────────────────────────────────────────────
+
+    func remove(_ item: TransferItem) {
+        guard item.status == .pending else { return }
+        queue.removeAll { $0.id == item.id }
+    }
+
+    func clearFinished() {
+        queue.removeAll { $0.status.isTerminal }
+    }
+
+    // ── File picker ─────────────────────────────────────────────────────────
+
+    func handleDrop(_ providers: [NSItemProvider]) async {
+        var urls: [URL] = []
+        for provider in providers {
+            if let url = try? await provider.loadItem(
+                forTypeIdentifier: UTType.fileURL.identifier) as? URL {
+                urls.append(url)
+            }
+        }
+        guard !urls.isEmpty else {
+            presentNotice("Couldn’t read the dropped item")
+            return
+        }
+        enqueue(urls: urls)
+    }
+
+    func openFilePicker() {
+        guard selectedPeer != nil else { return }
+
+        // A menu-bar app runs as .accessory and can't put an NSOpenPanel on
+        // screen without briefly becoming a regular app. Restore immediately
+        // after the panel closes.
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        defer { NSApp.setActivationPolicy(.accessory) }
+
+        let panel = NSOpenPanel()
+        panel.title = "Send to \(selectedPeer?.name ?? "device")"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+        panel.prompt = "Send"
+
+        if panel.runModal() == .OK {
+            enqueue(urls: panel.urls)
+        }
+    }
+
+    // ── Notice ──────────────────────────────────────────────────────────────
+
+    private func presentNotice(_ text: String) {
+        noticeWorkItem?.cancel()
+        notice = text
+        let work = DispatchWorkItem { [weak self] in self?.notice = nil }
+        noticeWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
+    }
+
+    func dismissNotice() {
+        noticeWorkItem?.cancel()
+        notice = nil
+    }
+}
