@@ -1,39 +1,39 @@
-// AeroDropApp.swift — AeroDrop  [Phase 3: App Shell]
-// Menu bar app entry point — no dock icon, no title bar.
-// Uses MenuBarExtra (macOS 13+) with .window style for the popover.
-// AppDelegate forces .accessory activation policy as a belt-and-suspenders
-// guard in case LSUIElement isn't picked up from Info.plist at launch.
+// AeroDropApp.swift — AeroDrop  [App Shell]
+// Menu bar app with no dock icon and no main window. The visible UI is an
+// AeroPanel owned by StatusPanelController, because MenuBarExtra forces a
+// fixed content size and AeroDrop needs a resizable panel.
 
 import SwiftUI
+import AppKit
 
 @main
 struct AeroDropApp: App {
-    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            DropZoneView()
-                .frame(width: 560, height: 380)
-        } label: {
-            Label("AeroDrop", systemImage: "antenna.radiowaves.left.and.right")
-                .labelStyle(.iconOnly)
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.window) // Floating panel (not a standard dropdown menu)
     }
 }
 
-// ── App Delegate ──────────────────────────────────────────────────────────────
+final class AppDelegate: NSObject, NSApplicationDelegate {
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+    private let panelController = StatusPanelController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Belt-and-suspenders: hide dock icon at runtime even if plist isn't
-        // read before the first NSApp event.
+        // Hide the dock icon at runtime even if LSUIElement is not honored
+        // before the first NSApp event.
         NSApp.setActivationPolicy(.accessory)
+        panelController.install()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Keep the process alive with only the menu bar icon visible.
+        // Keep the process alive with only the menu bar item visible.
         return false
     }
 }
