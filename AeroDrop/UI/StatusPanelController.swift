@@ -76,6 +76,9 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        // Dismissal usually happens via outside click or the status item, which
+        // never reaches -windowWillClose, so persist here rather than there.
+        persistSize()
         panel?.orderOut(nil)
         outsideClickMonitor.map { NSEvent.removeMonitor($0) }
         outsideClickMonitor = nil
@@ -183,7 +186,6 @@ final class StatusPanelController: NSObject, NSWindowDelegate {
     // ── NSWindowDelegate ────────────────────────────────────────────────────
 
     func windowWillClose(_ notification: Notification) {
-        persistSize()
         hide()
     }
 }
