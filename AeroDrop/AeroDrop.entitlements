@@ -26,5 +26,13 @@
     <!-- Read-write access to ~/Downloads for received files -->
     <key>com.apple.security.files.downloads.read-write</key>
     <true/>
+
+    <!-- ── Widget extension ────────────────────────────────────────────── -->
+    <!--  The widget shares state through ~/Library/Application Support, which  -->
+    <!--  needs no entitlement while the app is unsandboxed. To move to the    -->
+    <!--  canonical App Group container, set a DEVELOPMENT_TEAM on both        -->
+    <!--  targets and re-enable:                                             -->
+    <!--      com.apple.security.application-groups                           -->
+    <!--          = [group.com.siluna.AeroDrop]                              -->
 </dict>
 </plist>

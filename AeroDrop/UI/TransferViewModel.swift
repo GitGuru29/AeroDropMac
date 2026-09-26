@@ -18,7 +18,15 @@ final class TransferViewModel: ObservableObject {
     @Published var selectedPeer: AeroPeerInfo? {
         // Re-selecting a device must resume a queue that stalled while no
         // peer was selected, otherwise pending items never start.
-        didSet { if oldValue != selectedPeer { advanceQueue() } }
+        didSet {
+            guard oldValue != selectedPeer else { return }
+            // Remember the device so a relaunch reuses it without a click.
+            if let id = selectedPeer?.id, !id.isEmpty {
+                WidgetBridge.shared.rememberedPeerID = id
+            }
+            publishWidgetState(force: true)
+            advanceQueue()
+        }
     }
     @Published var isDropTargeted = false
     @Published private(set) var certFingerprint = ""
@@ -39,6 +47,7 @@ final class TransferViewModel: ObservableObject {
     private var activeOutgoingID: UUID?
     private var incomingID: UUID?
     private var hasStarted = false
+    private var widgetPoll: Timer?
 
     // ── Derived state ──────────────────────────────────────────────────────
 
@@ -75,12 +84,35 @@ final class TransferViewModel: ObservableObject {
         browser.startBrowsing()
         bonjour.startAdvertising()
         startServer()
+        startWidgetPolling()
+        publishWidgetState(force: true)
+    }
+
+    /// The widget extension has no way to signal the app directly, so the
+    /// shared container is polled for files dropped onto a widget.
+    private func startWidgetPolling() {
+        widgetPoll?.invalidate()
+        widgetPoll = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.drainWidgetDrop() }
+        }
+    }
+
+    private func drainWidgetDrop() {
+        let urls = WidgetBridge.shared.takePendingDrop()
+        guard !urls.isEmpty else { return }
+        guard selectedPeer != nil else {
+            presentNotice("Select a device in AeroDrop first")
+            return
+        }
+        enqueue(urls: urls)
     }
 
     func shutdown() {
         browser.stopBrowsing()
         peerSub?.cancel()
         bonjourSub?.cancel()
+        widgetPoll?.invalidate()
+        widgetPoll = nil
         server.stop()
         bonjour.stopAdvertising()
         hasStarted = false
@@ -115,12 +147,16 @@ final class TransferViewModel: ObservableObject {
             .sink { [weak self] newPeers in
                 guard let self else { return }
                 self.peers = newPeers
-                if let selected = self.selectedPeer, !newPeers.contains(selected) {
-                    self.selectedPeer = newPeers.first
+                // AirDrop-like default: reuse the device from last time when it's
+                // back on the network, otherwise fall back to the first found.
+                // Bonjour exposes no distance, so "nearest" is only ever a
+                // heuristic — see WidgetBridge.rememberedPeerID.
+                let current = self.selectedPeer
+                if current == nil || !newPeers.contains(current!) {
+                    let remembered = WidgetBridge.shared.rememberedPeerID
+                    self.selectedPeer = newPeers.first { $0.id == remembered } ?? newPeers.first
                 }
-                if self.selectedPeer == nil {
-                    self.selectedPeer = newPeers.first
-                }
+                self.publishWidgetState()
             }
 
         bonjourSub = bonjour.$registrationError
@@ -153,14 +189,17 @@ final class TransferViewModel: ObservableObject {
             incomingID = item.id
             queue.insert(item, at: 0)
         }
+        publishWidgetState()
     }
 
     private func handleIncomingCompletion(success: Bool, error: String?) {
         guard let id = incomingID, let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
         queue[index].finishedAt = Date()
+        if success { WidgetBridge.shared.noteSent(queue[index].filename) }
         incomingID = nil
         incomingMeter.reset()
+        publishWidgetState(force: true)
     }
 
     // ── Outbound queue ──────────────────────────────────────────────────────
@@ -201,6 +240,7 @@ final class TransferViewModel: ObservableObject {
 
         queue.append(contentsOf: items)
         advanceQueue()
+        publishWidgetState(force: true)
     }
 
     private func advanceQueue() {
@@ -251,15 +291,18 @@ final class TransferViewModel: ObservableObject {
             ? min(1, Double(p.bytesTransferred) / Double(p.totalBytes))
             : min(1, max(0, p.fraction))
         queue[index].status = .running(progress: fraction, bytesPerSecond: throughput)
+        publishWidgetState()
     }
 
     private func finishOutgoing(id: UUID, success: Bool, error: String?) {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
         queue[index].finishedAt = Date()
+        if success { WidgetBridge.shared.noteSent(queue[index].filename) }
         if activeOutgoingID == id { activeOutgoingID = nil }
         outgoingMeter.reset()
         advanceQueue()
+        publishWidgetState(force: true)
     }
 
     // ── Queue editing ───────────────────────────────────────────────────────
@@ -267,10 +310,12 @@ final class TransferViewModel: ObservableObject {
     func remove(_ item: TransferItem) {
         guard item.status == .pending else { return }
         queue.removeAll { $0.id == item.id }
+        publishWidgetState()
     }
 
     func clearFinished() {
         queue.removeAll { $0.status.isTerminal }
+        publishWidgetState()
     }
 
     // ── File picker ─────────────────────────────────────────────────────────
@@ -311,6 +356,49 @@ final class TransferViewModel: ObservableObject {
         if panel.runModal() == .OK {
             enqueue(urls: panel.urls)
         }
+    }
+
+    // ── Widget snapshot ──────────────────────────────────────────────────────
+
+    /// Reduces the full queue to the single most interesting transfer for the
+    /// widget: the running one, else the most recently finished.
+    private func publishWidgetState(force: Bool = false) {
+        let snapshot: AeroWidgetTransfer
+
+        if let active = activeItem {
+            let rateMBps = active.status.bytesPerSecond / 1_048_576
+            snapshot = AeroWidgetTransfer(
+                status: active.direction == .incoming ? .receiving : .sending,
+                fileName: active.filename,
+                progress: active.status.progress,
+                bytesTotal: Int64(active.totalBytes),
+                bytesTransferred: Int64(active.bytesTransferred),
+                throughputMBps: rateMBps,
+                etaSeconds: active.estimatedTimeRemaining ?? 0
+            )
+        } else if let last = queue.last(where: { $0.status.isTerminal }) {
+            var status: AeroWidgetTransfer.Status = .completed
+            var message: String?
+            switch last.status {
+            case .failed(let reason): status = .failed; message = reason
+            case .completed: status = .completed
+            default: status = .idle
+            }
+            snapshot = AeroWidgetTransfer(
+                status: status,
+                fileName: last.filename,
+                progress: status == .completed ? 1 : 0,
+                bytesTotal: Int64(last.totalBytes),
+                bytesTransferred: Int64(last.bytesTransferred),
+                throughputMBps: 0,
+                etaSeconds: 0,
+                errorMessage: message
+            )
+        } else {
+            snapshot = AeroWidgetTransfer()
+        }
+
+        WidgetBridge.shared.publish(peerName: selectedPeer?.name, transfer: snapshot, force: force)
     }
 
     // ── Notice ──────────────────────────────────────────────────────────────
