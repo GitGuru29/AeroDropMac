@@ -144,12 +144,86 @@ AeroDrop/
     TransferViewModel      Serialization, discovery wiring, throughput
     TransferItem           Queue item model + ThroughputMeter
     StatusPanelController  NSStatusItem + resizable AeroPanel
+    WidgetBridge           Shared-state writer, peer memory, drop hand-off
     Theme                  Colors, spacing, byte/duration formatting
 ```
 
 SwiftUI for the UI, Objective-C++ as the bridge into the C++/OpenSSL
 transport. There is no package manager dependency beyond OpenSSL; new files
-under `AeroDrop/` join the target automatically.
+under `AeroDrop/`, `AeroDropWidgets/` and `AeroDropShared/` join their targets
+automatically.
+
+```
+AeroDropWidgets/             WidgetKit extension (see "Widgets" above)
+  AeroDropWidget            One widget, three modes across four families
+  Intents/                  Mode parameter + the drop hand-off
+AeroDropShared/
+  AeroWidgetState           Codable snapshot shared with the widget
+```
+
+### Widgets
+
+`AeroDropWidgets` is a WidgetKit extension offering a single widget with a
+configurable mode, rendered at small, medium, large and extra-large:
+
+- **Drop to Send** — drag files straight onto the widget.
+- **Transfer Status** — the running transfer, or the last result.
+- **Recent Files** — what you sent last, to the current device.
+
+Right-click the widget → Edit Widget to switch mode.
+
+Two things widgets fundamentally cannot do, so this design leans on them
+instead of fighting them:
+
+**They are not live.** WidgetKit calls the timeline provider on a
+system-decided schedule and throttles `reloadAllTimelines`. The widget
+therefore never discovers peers or streams progress over the network — it
+renders a snapshot the app writes to a shared JSON file
+(`aerodrop_widget_state.json`) and refreshes on change, throttled to once a
+minute, with terminal events (completed/failed) forcing an immediate reload.
+Expect a transfer to look frozen mid-flight; the number is a snapshot, not a
+live gauge.
+
+**They cannot signal the app.** There is no supported push from an extension to
+its host, so a file dropped on the widget is written to the shared file as a
+pending drop and the app picks it up on a 1.5 s poll
+(`WidgetBridge.takePendingDrop`). AeroDrop is a menu-bar app that stays
+running, so the poll always succeeds. The payload is cleared on read so a
+redraw can't resend it.
+
+#### Shared container, and why there isn't an App Group
+
+The canonical way to share state is the App Group container
+(`group.com.siluna.AeroDrop`). It is implemented and preferred, but it is
+**not enabled**, because an app-group entitlement requires a provisioning
+profile and this project is built without a `DEVELOPMENT_TEAM`. Adding it
+unconditionally breaks `xcodebuild` outright with *"entitlements that require
+signing with a development certificate"*.
+
+Instead the state lives in `~/Library/Application Support/AeroDrop/`, which both
+the app and the unsandboxed extension can read and write with no entitlement.
+Two details worth knowing if you touch this:
+
+- `containerURL(forSecurityApplicationGroupIdentifier:)` returns a **path even
+  when the group is unprovisioned**, but the container directory is never
+  created — so the app group is only used once the directory really exists on
+  disk. Checking the path alone is not enough, and writes fail with `ENOENT`.
+- To move to the App Group, set a `DEVELOPMENT_TEAM` on both targets, add
+  `com.apple.security.application-groups = [group.com.siluna.AeroDrop]` to both
+  entitlements files, and set `ENABLE_APP_SANDBOX = YES` on the extension.
+
+### Nearest device by default
+
+To reduce taps, AeroDrop remembers the device you last used and re-selects it
+on relaunch, falling back to the first device discovered. The sidebar still
+overrides it, and the choice is stored under `AeroDropDefaultPeerID`.
+
+This is *not* real proximity. Bonjour exposes no distance information, and
+measuring latency instead would mean opening a TCP connection to every peer on
+the network during discovery — which crashes the Android client's
+`SSLServerSocket`, a constraint the code comments call out. So "nearest" means
+"last used, else first found", and the naming is deliberately worded that way in
+the code.
 
 ### A note on throughput
 

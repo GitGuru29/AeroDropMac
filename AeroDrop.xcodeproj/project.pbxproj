@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		E5E70BD02F8F6162009116AC /* AeroDrop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AeroDrop.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0000001000000000000A002 /* AeroDropWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AeroDropWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +17,63 @@
 			path = AeroDrop;
 			sourceTree = "<group>";
 		};
+		B0000001000000000000A003 /* AeroDropWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AeroDropWidgets;
+			sourceTree = "<group>";
+		};
+		B0000001000000000000A004 /* AeroDropShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = AeroDropShared;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		B0000001000000000000A00D /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B0000001000000000000A00E /* AeroDropWidgets.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXBuildFile section */
+		B0000001000000000000A00E /* AeroDropWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B0000001000000000000A002 /* AeroDropWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		B0000001000000000000A00C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = E5E70BC82F8F6161009116AC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B0000001000000000000A001;
+			remoteInfo = AeroDropWidgets;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		B0000001000000000000A00B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B0000001000000000000A001 /* AeroDropWidgets */;
+			targetProxy = B0000001000000000000A00C /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		E5E70BCD2F8F6162009116AC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B0000001000000000000A006 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +87,8 @@
 			isa = PBXGroup;
 			children = (
 				E5E70BD22F8F6162009116AC /* AeroDrop */,
+				B0000001000000000000A003 /* AeroDropWidgets */,
+				B0000001000000000000A004 /* AeroDropShared */,
 				E5E70BD12F8F6162009116AC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				E5E70BD02F8F6162009116AC /* AeroDrop.app */,
+				B0000001000000000000A002 /* AeroDropWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,13 +112,16 @@
 				E5E70BCC2F8F6162009116AC /* Sources */,
 				E5E70BCD2F8F6162009116AC /* Frameworks */,
 				E5E70BCE2F8F6162009116AC /* Resources */,
+				B0000001000000000000A00D /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B0000001000000000000A00B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				E5E70BD22F8F6162009116AC /* AeroDrop */,
+				B0000001000000000000A004 /* AeroDropShared */,
 			);
 			name = AeroDrop;
 			packageProductDependencies = (
@@ -69,6 +129,29 @@
 			productName = AeroDrop;
 			productReference = E5E70BD02F8F6162009116AC /* AeroDrop.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B0000001000000000000A001 /* AeroDropWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0000001000000000000A008 /* Build configuration list for PBXNativeTarget "AeroDropWidgets" */;
+			buildPhases = (
+				B0000001000000000000A005 /* Sources */,
+				B0000001000000000000A006 /* Frameworks */,
+				B0000001000000000000A007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B0000001000000000000A003 /* AeroDropWidgets */,
+				B0000001000000000000A004 /* AeroDropShared */,
+			);
+			name = AeroDropWidgets;
+			packageProductDependencies = (
+			);
+			productName = AeroDropWidgets;
+			productReference = B0000001000000000000A002 /* AeroDropWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -81,6 +164,9 @@
 				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					E5E70BCF2F8F6162009116AC = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					B0000001000000000000A001 = {
 						CreatedOnToolsVersion = 26.3;
 					};
 				};
@@ -100,6 +186,7 @@
 			projectRoot = "";
 			targets = (
 				E5E70BCF2F8F6162009116AC /* AeroDrop */,
+				B0000001000000000000A001 /* AeroDropWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -112,10 +199,24 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B0000001000000000000A007 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E5E70BCC2F8F6162009116AC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B0000001000000000000A005 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -333,6 +434,58 @@
 			};
 			name = Release;
 		};
+		B0000001000000000000A009 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "AeroDropWidgets/AeroDropWidgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "AeroDropWidgets/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				PRODUCT_BUNDLE_IDENTIFIER = com.siluna.AeroDrop.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B0000001000000000000A00A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = "AeroDropWidgets/AeroDropWidgets.entitlements";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "AeroDropWidgets/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				PRODUCT_BUNDLE_IDENTIFIER = com.siluna.AeroDrop.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -350,6 +503,15 @@
 			buildConfigurations = (
 				E5E70BDC2F8F6163009116AC /* Debug */,
 				E5E70BDD2F8F6163009116AC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B0000001000000000000A008 /* Build configuration list for PBXNativeTarget "AeroDropWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0000001000000000000A009 /* Debug */,
+				B0000001000000000000A00A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
