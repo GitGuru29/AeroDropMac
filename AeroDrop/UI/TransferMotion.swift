@@ -287,17 +287,19 @@ struct WaterSurface: View {
                 for (index, phase) in [0.0, 1.7, 3.4].enumerated() {
                     var path = Path()
                     let steps = max(2, Int(size.width / 3))
-                    let baseY = size.height * (0.30 + 0.16 * Double(index))
+                    let indexF = Double(index)
+                    let baseY = size.height * CGFloat(0.30 + 0.16 * indexF)
+                    let speed = 0.7 + 0.25 * indexF
                     for step in 0...steps {
-                        let x = size.width * CGFloat(step) / CGFloat(steps)
-                        let u = CGFloat(step) / CGFloat(steps)
-                        let y = baseY
-                            + sin(u * .pi * 2 + t * (0.7 + 0.25 * Double(index)) + phase) * amp
-                            * sin(u * .pi)
+                        let u = Double(step) / Double(steps)
+                        let envelope = sin(u * .pi)
+                        let swell = sin(u * .pi * 2 + t * speed + phase) * amp * envelope
+                        let x = size.width * CGFloat(u)
+                        let y = baseY + CGFloat(swell)
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) }
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
-                    ctx.stroke(path, with: .color(tint.opacity(0.20 - 0.05 * Double(index))),
+                    ctx.stroke(path, with: .color(tint.opacity(0.20 - 0.05 * indexF)),
                                lineWidth: 1.2)
                 }
             }
