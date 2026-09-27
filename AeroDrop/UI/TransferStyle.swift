@@ -41,49 +41,6 @@ enum TransferStyle {
 }
 
 /// A progress bar that animates toward its value instead of snapping.
-///
-/// Used for both the per-file bar and the overall queue bar so a transfer looks
-/// the same wherever it appears.
-struct TransferProgressBar: View {
-    let progress: Double
-    /// An active transfer that has not reported a fraction yet gets a moving
-    /// highlight rather than a bar stuck at zero, which reads as "broken".
-    var isActive: Bool = false
-    var height: CGFloat = 4
-
-    private var clamped: Double { max(0, min(1, progress)) }
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Theme.hairline)
-
-                Capsule(style: .continuous)
-                    .fill(TransferStyle.accent)
-                    .frame(width: geo.size.width * clamped)
-                    .opacity(isActive && clamped == 0 ? 0.35 : 1)
-
-                if isActive && clamped == 0 {
-                    Capsule(style: .continuous)
-                        .fill(TransferStyle.accent)
-                        .frame(width: geo.size.width * 0.3)
-                        .offset(x: indeterminateOffset(in: geo.size.width))
-                        .opacity(0.8)
-                }
-            }
-        }
-        .frame(height: height)
-        .animation(TransferStyle.progress, value: clamped)
-        .accessibilityHidden(true)
-    }
-
-    private func indeterminateOffset(in width: CGFloat) -> CGFloat {
-        let span = width * 0.7
-        return -span + (Date().timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4) * (span * 2)
-    }
-}
-
 /// The direction marker shown on every transfer row and in the summary.
 struct DirectionGlyph: View {
     let item: TransferItem

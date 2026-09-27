@@ -192,6 +192,9 @@ final class TransferViewModel: ObservableObject {
             withAnimation(TransferStyle.structural) {
                 queue.append(item)
             }
+            // Same event as an outgoing transfer: the ripple is the app's
+            // shared "something started moving" signal, not a direction cue.
+            RippleCenter.shared.emit(at: UnitPoint(x: 0.5, y: 0.45), style: .start)
         }
         publishWidgetState()
     }
@@ -200,7 +203,10 @@ final class TransferViewModel: ObservableObject {
         guard let id = incomingID, let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
         queue[index].finishedAt = Date()
-        if success { WidgetBridge.shared.noteSent(queue[index].filename) }
+        if success {
+            WidgetBridge.shared.noteSent(queue[index].filename)
+            RippleCenter.shared.emit(at: UnitPoint(x: 0.5, y: 0.45), style: .complete)
+        }
         incomingID = nil
         incomingMeter.reset()
         publishWidgetState(force: true)
@@ -245,6 +251,8 @@ final class TransferViewModel: ObservableObject {
         withAnimation(TransferStyle.structural) {
             queue.append(contentsOf: items)
         }
+        // One ripple for the whole batch: a drop of twenty files is one gesture.
+        RippleCenter.shared.emit(at: UnitPoint(x: 0.5, y: 0.45), style: .start)
         advanceQueue()
         publishWidgetState(force: true)
     }
@@ -304,7 +312,10 @@ final class TransferViewModel: ObservableObject {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].status = success ? .completed : .failed(error ?? "Transfer failed")
         queue[index].finishedAt = Date()
-        if success { WidgetBridge.shared.noteSent(queue[index].filename) }
+        if success {
+            WidgetBridge.shared.noteSent(queue[index].filename)
+            RippleCenter.shared.emit(at: UnitPoint(x: 0.5, y: 0.45), style: .complete)
+        }
         if activeOutgoingID == id { activeOutgoingID = nil }
         outgoingMeter.reset()
         advanceQueue()

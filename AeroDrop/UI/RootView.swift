@@ -44,6 +44,11 @@ struct RootView: View {
                 } else {
                     TransferQueueView(model: model)
                 }
+
+                // Ripples spread across the whole content area, so a splash
+                // reads as landing in the panel rather than inside one row.
+                RippleLayer()
+                    .clipShape(Rectangle())
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(nsColor: .windowBackgroundColor))

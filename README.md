@@ -83,20 +83,44 @@ Notification Center and drag files straight onto it.
 
 ### Sending and receiving look the same
 
-Every visual decision about a transfer lives in one file, `TransferStyle.swift`,
-and both directions run the same code path. The only intended differences are
-the arrow (`arrow.up.to.line` / `arrow.down.to.line`) and the verb — the tint,
-progress bar, animations, row layout and summary treatment are literally the
-same code. Direction is never signalled by colour, so the two can't drift apart
-visually.
+Every visual decision about a transfer lives in two files, `TransferStyle.swift`
+and `TransferMotion.swift`, and both directions run the same code path. The only
+intended differences are the arrow (`arrow.up.to.line` / `arrow.down.to.line`)
+and the verb — the tint, progress bar, ripples, row layout and summary treatment
+are literally the same code. Direction is never signalled by colour, so the two
+can't drift apart visually.
 
 | | |
 |---|---|
 | Row layout | identical; a direction glyph on every row so inbound and outbound are distinguishable without reading text |
-| Progress | one `TransferProgressBar` used for the queue, the row, and the status icon |
-| Animations | rows slide in and out, the bar eases toward each ~100 ms tick, completion gets a tint wash and a single bounce |
+| Progress | one `WaveProgressBar` used for the queue, the row, and the status icon |
+| Animations | rows slide in and out, the bar's waterline travels, completion gets a tint wash and a single bounce |
 | Summary | the active transfer is described by the same three lines whichever way it is going |
 | Menu bar | `TransferActivity` mirrors any in-flight transfer as a percentage, so closing the panel never hides it |
+
+### The water metaphor
+
+Transfers read as things landing in water. All of it is drawn with `Canvas` and
+driven by `TimelineView(.animation)`, so it stays on the GPU.
+
+- **Ripples** — three concentric rings expanding from the point of impact, with
+  staggered starts so they chase each other outward, over a short soft bloom at
+  the contact point. One ring would read as a loading spinner; three read as a
+  splash. A transfer that starts fires the same ripple in both directions:
+  `RippleStyle` has no per-direction case, and the only thing distinguishing
+  inbound from outbound is the arrow and the verb in the row.
+- **`WaveProgressBar`** — progress is water filling a vessel from the bottom, so
+  the bar is a waterline rather than a filled rectangle. Two summed sines make
+  the crest travel along the bar, which keeps moving even when a transfer stalls
+  between progress callbacks. The status icon uses the same view with the glow
+  suppressed, so the menu bar never blurs.
+- **`WaterSurface`** — slow swells behind the idle drop zone, lifting in
+  amplitude as a transfer picks up speed.
+
+`RippleLayer` only mounts its timeline while a ripple is actually alive;
+`TimelineView(.animation)` redraws every frame forever otherwise, which is the
+wrong trade for an app that spends most of its life in the menu bar. Every view
+in the file renders its settled state when the system asks for reduced motion.
 
 The bar is `easeOut(0.22)` — long enough to smooth the 100 ms progress callbacks
 into continuous motion, short enough not to lag a stall. An active transfer that
@@ -192,6 +216,7 @@ AeroDrop/
     TransferViewModel      Serialization, discovery wiring, throughput
     TransferItem           Queue item model + ThroughputMeter
     TransferStyle          Shared send/receive presentation + animated bar
+    TransferMotion         Ripples, wave progress bar, idle water surface
     TransferActivity       Transfer state mirrored into the menu bar
     StatusPanelController  NSStatusItem + resizable AeroPanel
     WidgetBridge           Shared-state writer, peer memory, drop hand-off
