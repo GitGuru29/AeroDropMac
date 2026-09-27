@@ -415,6 +415,36 @@ void AeroServer::sendFile(const std::string& filepath,
                (unsigned long long)sent, (unsigned long long)file_size);
         if (done) done(ok, ok ? "" : "Incomplete transfer");
 
+        // ── Drain before close ─────────────────────────────────────────────────
+        // A TLS 1.3 server sends NewSessionTicket records right after the
+        // handshake, and we never read them. close() on a socket that still has
+        // unread data in its receive queue makes the kernel send RST rather than
+        // FIN, and an RST discards whatever the peer has not read yet — the
+        // receiver loses the tail of the payload and reports "Connection reset"
+        // part-way through a transfer that we counted as fully sent.
+        //
+        // So read until the peer closes, draining the tickets and its
+        // close_notify, which makes our close a clean FIN. Bounded by a receive
+        // timeout and an iteration cap, because a peer that never closes would
+        // otherwise strand this thread.
+        {
+            struct timeval tv{};
+            tv.tv_sec  = 2;
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            uint8_t drain[4096];
+            for (int i = 0; i < 64; ++i) {
+                int rd = SSL_read(ssl, drain, sizeof(drain));
+                if (rd <= 0) {
+                    int err = SSL_get_error(ssl, rd);
+                    if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE ||
+                        err == SSL_ERROR_ZERO_RETURN || err == SSL_ERROR_SYSCALL) {
+                        break;   // timed out, or the peer has finished
+                    }
+                    break;       // anything else is not worth chasing
+                }
+            }
+        }
+
         SSL_shutdown(ssl);
         SSL_free(ssl);
         SSL_CTX_free(cli_ctx);
