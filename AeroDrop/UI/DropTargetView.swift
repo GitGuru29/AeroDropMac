@@ -45,7 +45,20 @@ struct DropTargetView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(Theme.spacingLG)
-        .background(dropBackdrop)
+        .background {
+            ZStack {
+                dropBackdrop
+                // Idle swells. Intensity tracks activity so the surface is
+                // nearly still when nothing is happening and lifts when a
+                // transfer is running.
+                WaterSurface(intensity: model.overallProgress)
+                    .padding(.horizontal, Theme.spacingLG)
+                    .padding(.bottom, Theme.spacingSM)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                    .mask(LinearGradient(colors: [.clear, .black],
+                                         startPoint: .top, endPoint: .bottom))
+            }
+        }
         .overlay(border)
         .animation(.easeOut(duration: 0.15), value: model.isDropTargeted)
         .accessibilityElement(children: .contain)

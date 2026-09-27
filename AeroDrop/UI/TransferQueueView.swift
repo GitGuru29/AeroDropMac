@@ -40,9 +40,10 @@ struct TransferQueueView: View {
                 }
             }
 
-            TransferProgressBar(
+            WaveProgressBar(
                 progress: model.overallProgress,
-                isActive: model.isTransferring
+                isActive: model.isTransferring,
+                height: 10
             )
             .accessibilityElement()
             .accessibilityLabel("Overall progress")
@@ -181,7 +182,7 @@ struct TransferRow: View {
                 .lineLimit(1)
 
                 if item.status.isRunning {
-                    TransferProgressBar(progress: item.status.progress, isActive: true)
+                    WaveProgressBar(progress: item.status.progress, isActive: true, height: 6)
                         .padding(.top, 1)
                 }
             }
@@ -233,7 +234,7 @@ struct TransferRow: View {
         case .running:
             // Same bar language as the summary, so the icon is not a second,
             // unrelated spinner next to a linear bar.
-            TransferProgressBar(progress: item.status.progress, isActive: true, height: 3)
+            WaveProgressBar(progress: item.status.progress, isActive: true, height: 18, showsGlow: false)
                 .frame(width: 18)
         case .completed:
             Image(systemName: "checkmark.circle.fill")
